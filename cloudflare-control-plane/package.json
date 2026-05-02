@@ -13,14 +13,20 @@
     "helm": "tsx src/cli/helm.ts",
     "deploy:control-plane": "wrangler deploy -c wrangler.control-plane.toml",
     "deploy:agent-runtime": "wrangler deploy -c wrangler.agent-runtime.toml",
-    "build:container": "bash scripts/build-agent-runtime.sh"
+    "build:container": "bash scripts/build-agent-runtime.sh",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply helm --local -c wrangler.control-plane.toml"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250430.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.3",
+    "better-sqlite3": "^12.9.0",
+    "drizzle-kit": "^0.31.10",
     "tsx": "^4.19.4",
     "typescript": "^5.5.2",
     "vitest": "^3.1.2",
