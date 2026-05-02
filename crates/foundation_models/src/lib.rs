@@ -45,6 +45,12 @@ mod ffi;
 /// generate Swift on Linux CI for testing without needing a Mac.
 pub mod generable;
 
+/// PDX-15: chained execution loop over Foundation Models. macOS-only —
+/// the loop is meaningful only when an FM session is reachable, and we
+/// don't want to compile a non-functional stub on Linux.
+#[cfg(target_os = "macos")]
+pub mod chain;
+
 /// Errors returned by the Foundation Models bridge.
 #[derive(Debug, thiserror::Error)]
 pub enum FoundationModelsError {
