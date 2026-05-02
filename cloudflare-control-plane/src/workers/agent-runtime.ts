@@ -38,7 +38,7 @@ export default {
     }
 
     const manifest = manifestForRuntime(env);
-    const accessFailure = requireAccess(request, manifest.access.required);
+    const accessFailure = await requireAccess(request, manifest.access, env.HELM_ENVIRONMENT);
     if (accessFailure) return accessFailure;
 
     if (url.pathname === "/api/runtime/sessions") {

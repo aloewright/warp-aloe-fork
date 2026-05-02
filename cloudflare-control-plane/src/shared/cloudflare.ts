@@ -40,10 +40,12 @@ interface NamedResource {
   id?: string;
   name?: string;
   title?: string;
+  tags?: string[];
 }
 
 export interface LiveInventory {
   workers: NamedResource[];
+  workerSettings: Record<string, { tags?: string[]; unavailable?: boolean }>;
   d1: NamedResource[];
   r2: NamedResource[];
   kv: NamedResource[];
@@ -62,13 +64,42 @@ export async function fetchInventory(
     client.get(`/accounts/${accountId}/ai-gateway/gateways`)
   ]);
 
+  const workerList = arrayResult(workers);
+  const workerSettings = await fetchWorkerSettings(client, accountId, workerList);
+
   return {
-    workers: arrayResult(workers),
+    workers: workerList,
+    workerSettings,
     d1: arrayResult(d1),
     r2: arrayResult(r2),
     kv: arrayResult(kv),
     aiGateways: arrayResult(aiGateways)
   };
+}
+
+async function fetchWorkerSettings(
+  client: CloudflareClient,
+  accountId: string,
+  workers: NamedResource[],
+): Promise<Record<string, { tags?: string[]; unavailable?: boolean }>> {
+  const helmWorkers = workers
+    .map(resourceName)
+    .filter((name) => name.startsWith("helm-"));
+
+  const entries = await Promise.all(
+    helmWorkers.map(async (name) => {
+      try {
+        const settings = (await client.get(
+          `/accounts/${accountId}/workers/scripts/${name}/settings`,
+        )) as { tags?: string[] };
+        return [name, { tags: settings.tags ?? [] }] as const;
+      } catch {
+        return [name, { unavailable: true }] as const;
+      }
+    }),
+  );
+
+  return Object.fromEntries(entries);
 }
 
 function arrayResult(value: unknown): NamedResource[] {
@@ -95,6 +126,7 @@ export interface AuditReport {
   extraUnownedWorkers: string[];
   staleEnvironmentWorkers: string[];
   workersWithoutHelmMetadata: string[];
+  workersWithUnknownHelmMetadata: string[];
   containersEnabledButUnused: boolean;
 }
 
@@ -124,9 +156,18 @@ export function auditInventory(
     .filter((worker) => {
       const name = resourceName(worker);
       if (!expectedAllEnvWorkers.has(name)) return false;
-      const maybeWithTags = worker as NamedResource & { tags?: string[]; metadata?: Record<string, string> };
-      return !maybeWithTags.tags?.some((tag) => tag.startsWith("helm.")) &&
-        !Object.keys(maybeWithTags.metadata ?? {}).some((key) => key.startsWith("helm."));
+      const settings = inventory.workerSettings[name];
+      if (settings?.unavailable) return false;
+      const tags = settings?.tags ?? worker.tags ?? [];
+      return !tags.some((tag) => tag.startsWith("helm."));
+    })
+    .map(resourceName)
+    .filter(Boolean);
+
+  const workersWithUnknownHelmMetadata = inventory.workers
+    .filter((worker) => {
+      const name = resourceName(worker);
+      return expectedAllEnvWorkers.has(name) && inventory.workerSettings[name]?.unavailable === true;
     })
     .map(resourceName)
     .filter(Boolean);
@@ -138,6 +179,7 @@ export function auditInventory(
     extraUnownedWorkers,
     staleEnvironmentWorkers,
     workersWithoutHelmMetadata,
+    workersWithUnknownHelmMetadata,
     containersEnabledButUnused:
       manifest.containers[env]?.enabled === true &&
       !workerNames.includes(workerName("helm-agent-runtime", env))

@@ -50,6 +50,53 @@ function fail(e: unknown) {
   return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
 }
 
+function removeSqlComments(sql: string): string {
+  return sql
+    .replace(/--.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function hasMultipleSqlStatements(sql: string): boolean {
+  let quote: "'" | "\"" | "`" | null = null;
+
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i];
+    const next = sql[i + 1];
+
+    if (quote) {
+      if (char === quote) {
+        if (next === quote) {
+          i += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+
+    if (char === "'" || char === "\"" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === ";") {
+      return sql.slice(i + 1).trim().length > 0;
+    }
+  }
+
+  return false;
+}
+
+function isReadOnlySql(sql: string): boolean {
+  const normalized = removeSqlComments(sql).trim().toLowerCase();
+  if (!normalized) return false;
+  if (hasMultipleSqlStatements(normalized)) return false;
+  const singleStatement = normalized.endsWith(";")
+    ? normalized.slice(0, -1).trim()
+    : normalized;
+  return /^(select|pragma)\b/.test(singleStatement);
+}
+
 export class CloudflareMCP extends McpAgent<Env> {
   server = new McpServer({ name: "cloudflare-mcp", version: "1.0.0" });
 
@@ -120,7 +167,7 @@ export class CloudflareMCP extends McpAgent<Env> {
 
     this.server.tool(
       "d1_query",
-      "Execute a read-only SQL query against a D1 database. Phase C MCP tools do not permit DML or destructive mutation.",
+      "Execute a single read-only SQL query against a D1 database. Phase C MCP tools do not permit DML or destructive mutation.",
       {
         database_id: z.string().describe("D1 database ID (UUID)"),
         sql: z.string().describe("SQL statement to execute"),
@@ -131,9 +178,8 @@ export class CloudflareMCP extends McpAgent<Env> {
       },
       async ({ database_id, sql, params }) => {
         try {
-          const normalized = sql.trim().toLowerCase();
-          if (!normalized.startsWith("select") && !normalized.startsWith("with") && !normalized.startsWith("pragma")) {
-            throw new Error("Only read-only SELECT, WITH, and PRAGMA queries are allowed.");
+          if (!isReadOnlySql(sql)) {
+            throw new Error("Only a single read-only SELECT or PRAGMA statement is allowed.");
           }
           return ok(
             await cf(`/accounts/${acct()}/d1/database/${database_id}/query`, {

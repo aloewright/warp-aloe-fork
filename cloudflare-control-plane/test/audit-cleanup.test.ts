@@ -27,12 +27,16 @@ const manifest = parseManifest({
 
 const inventory = {
   workers: [
-    { id: "1", name: "helm-control-plane-dev", metadata: { "helm.owner": "control-plane" } },
+    { id: "1", name: "helm-control-plane-dev" },
     { id: "2", name: "helm-cloudflare-mcp-dev" },
     { id: "3", name: "helm-extra-dev" },
     { id: "4", name: "helm-extra-production" },
     { id: "5", name: "helm-keep-dev" }
   ],
+  workerSettings: {
+    "helm-control-plane-dev": { tags: ["helm.owner:control-plane"] },
+    "helm-cloudflare-mcp-dev": { tags: [] }
+  },
   d1: [],
   r2: [],
   kv: [],

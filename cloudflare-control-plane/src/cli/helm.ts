@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   assertDeletionAllowed,
   auditInventory,
@@ -58,8 +59,13 @@ async function withInventory(envName: string) {
   assertEnvironment(manifest, envName);
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!token) throw new Error("CLOUDFLARE_API_TOKEN is required.");
-  const inventory = await fetchInventory(createCloudflareClient(token), manifest.accountId);
-  return { manifest, inventory, env: envName as HelmEnvironment };
+  const client = createCloudflareClient(token);
+  const inventory = await fetchInventory(client, manifest.accountId);
+  return { manifest, inventory, env: envName as HelmEnvironment, client };
+}
+
+function repoRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 }
 
 async function run(command: string, args: string[]): Promise<void> {
@@ -130,7 +136,7 @@ async function main(): Promise<void> {
           confirm: typeof flags.confirm === "string" ? flags.confirm : undefined
         });
         if (candidate.type === "worker") {
-          await createCloudflareClient(process.env.CLOUDFLARE_API_TOKEN ?? "").delete(
+          await result.client.delete(
             `/accounts/${result.manifest.accountId}/workers/scripts/${candidate.name}`,
           );
           console.log(`deleted worker ${candidate.name}`);
@@ -142,11 +148,12 @@ async function main(): Promise<void> {
       const env = requireEnv(flags);
       const worker = flags.worker;
       if (typeof worker !== "string") throw new Error("--worker is required.");
+      const root = repoRoot();
       const config = worker === "helm-agent-runtime"
-        ? "cloudflare-control-plane/wrangler.agent-runtime.toml"
+        ? resolve(root, "cloudflare-control-plane/wrangler.agent-runtime.toml")
         : worker === "helm-control-plane"
-          ? "cloudflare-control-plane/wrangler.control-plane.toml"
-          : "cloudflare-mcp/wrangler.toml";
+          ? resolve(root, "cloudflare-control-plane/wrangler.control-plane.toml")
+          : resolve(root, "cloudflare-mcp/wrangler.toml");
       await run("wrangler", ["deploy", "-c", config, "--env", env]);
       return;
     }
