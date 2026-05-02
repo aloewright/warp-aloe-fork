@@ -12,7 +12,8 @@
     "test": "vitest run",
     "helm": "tsx src/cli/helm.ts",
     "deploy:control-plane": "wrangler deploy -c wrangler.control-plane.toml",
-    "deploy:agent-runtime": "wrangler deploy -c wrangler.agent-runtime.toml"
+    "deploy:agent-runtime": "wrangler deploy -c wrangler.agent-runtime.toml",
+    "build:container": "bash scripts/build-agent-runtime.sh"
   },
   "dependencies": {
     "zod": "^3.23.8"

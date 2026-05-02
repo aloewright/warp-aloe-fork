@@ -6,6 +6,16 @@ compatibility_flags = ["nodejs_compat"]
 [durable_objects]
 bindings = [{ name = "RUNTIME_SESSION_COORDINATOR", class_name = "RuntimeSessionCoordinator" }]
 
+# Agent runtime container — built from ./Dockerfile.agent-runtime.
+# Lifecycle is owned by the RuntimeSessionCoordinator DO (PDX-20):
+# the DO starts/stops one container instance per agent session and
+# streams stdout/stderr back through the Worker.
+[[containers]]
+name = "agent-runtime"
+image = "./Dockerfile.agent-runtime"
+max_instances = 50
+instance_type = "standard"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RuntimeSessionCoordinator"]
