@@ -14831,6 +14831,7 @@ dependencies = [
  "web-sys",
  "websocket",
  "wgpu",
+ "which",
  "windows 0.62.2",
  "windows-registry 0.2.0",
  "windows-result 0.2.0",

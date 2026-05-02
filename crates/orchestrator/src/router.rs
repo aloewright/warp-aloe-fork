@@ -44,7 +44,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{Agent, AgentId, Budget, BudgetError, BudgetTier, Provider, Role, Task};
+use crate::{Agent, AgentId, Budget, BudgetError, BudgetTier, Health, Provider, Role, Task};
 
 /// Registration record for a single [`Agent`] instance.
 ///
@@ -112,6 +112,37 @@ impl Router {
     pub fn register(&mut self, registration: AgentRegistration) {
         let id = registration.agent.id();
         self.agents.insert(id, registration);
+    }
+
+    /// Borrow the [`Arc`] handle of a registered agent by id, without
+    /// running the dispatch algorithm.
+    ///
+    /// Used by call sites that need to bypass [`Self::select`] entirely —
+    /// for instance, the in-prompt selector pin in `AgentDriver` that forces
+    /// the next turn through [`Provider::ClaudeCode`] regardless of
+    /// tie-break. Returns `None` when no agent is registered under `id`.
+    pub fn agent_arc(&self, id: &AgentId) -> Option<&Arc<dyn Agent>> {
+        self.agents.get(id).map(|reg| &reg.agent)
+    }
+
+    /// Snapshot the [`Health`] of a registered agent without taking a
+    /// dispatch lock or running [`Self::select`].
+    ///
+    /// Returns `None` when no agent with `id` is registered. This is the
+    /// canonical inspection path used by the settings UI ("Signed in?") and
+    /// the in-prompt selector ("disable Claude Code row when unhealthy")
+    /// — both paths render synchronously on the UI thread, so they want a
+    /// cheap snapshot rather than going through the full router algorithm.
+    pub fn agent_health(&self, id: &AgentId) -> Option<Health> {
+        self.agents.get(id).map(|reg| reg.agent.health())
+    }
+
+    /// Iterate over all registered agent IDs in registration order is **not**
+    /// guaranteed (the registry is a `HashMap`); callers that need a stable
+    /// order should sort the returned `Vec`. Exposed mainly for diagnostics
+    /// and the budget-snapshot UI.
+    pub fn registered_agent_ids(&self) -> Vec<AgentId> {
+        self.agents.keys().cloned().collect()
     }
 
     /// Choose the best [`Agent`] for `task` per the algorithm in the module

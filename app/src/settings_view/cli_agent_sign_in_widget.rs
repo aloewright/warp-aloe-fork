@@ -43,17 +43,49 @@ pub(crate) enum CliAgentAuthState {
 }
 
 impl CliAgentAuthState {
-    /// Skeleton stub — always reports `SignedOut`. Replace once `which::which`
-    /// is wired in and the Router exposes a health view (PDX-103 task 2 + 6).
+    /// Cheap, synchronous auth-state probe (PDX-103 [B1] task 6 wiring).
+    ///
+    /// Two checks compose into one of three states:
+    ///
+    /// 1. `which::which("claude")` — is the CLI on `PATH` at all?
+    ///    Missing → `NotInstalled`.
+    /// 2. `local_orchestrator::agent_health_snapshot` — does the persistent
+    ///    Router consider the registered `ClaudeCodeAgent` healthy?
+    ///    Healthy → `SignedIn`. Unhealthy / absent → `SignedOut` (the
+    ///    binary is on PATH but the orchestrator hasn't been able to
+    ///    register it, or the user signed out and the agent flipped its
+    ///    own health on the next failed run).
+    ///
+    /// Both probes are non-blocking: `which::which` walks the `PATH`
+    /// environment variable in-process (no subprocess), and
+    /// `agent_health_snapshot` `try_lock`s the router and returns `None`
+    /// rather than block — see `local_orchestrator.rs`. The whole call is
+    /// safe from any UI render path.
+    ///
+    /// Compiled out on WASM: the persistent router and `which` are both
+    /// gated `cfg(not(target_family = "wasm"))`. The widget falls back to
+    /// `SignedOut` on web so the row renders coherently without a real
+    /// CLI.
     pub(crate) fn detect_claude() -> Self {
-        // TODO(PDX-103 task 6): replace stub with
-        //   match which::which("claude") {
-        //       Err(_) => CliAgentAuthState::NotInstalled,
-        //       Ok(_) => router_health(&AgentId::new("claude-sonnet-46"))
-        //                   .map(|h| if h.healthy { SignedIn } else { SignedOut })
-        //                   .unwrap_or(SignedOut),
-        //   }
-        Self::SignedOut
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use crate::ai::agent_sdk::driver::local_orchestrator;
+            use orchestrator::AgentId;
+
+            if which::which("claude").is_err() {
+                return Self::NotInstalled;
+            }
+
+            let id = AgentId(local_orchestrator::CLAUDE_CODE_SONNET_46_ID.to_string());
+            match local_orchestrator::agent_health_snapshot(&id) {
+                Some(h) if h.healthy => Self::SignedIn,
+                _ => Self::SignedOut,
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Self::SignedOut
+        }
     }
 
     fn banner(&self) -> Option<(&'static str, &'static str)> {

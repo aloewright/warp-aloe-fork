@@ -217,6 +217,10 @@ vec1.workspace = true
 version-compare.workspace = true
 vte.workspace = true
 walkdir.workspace = true
+# Used (target_family != wasm) to detect the `claude` CLI on PATH for the
+# Claude Code sign-in widget and for gating ClaudeCodeAgent registration on
+# binary presence (PDX-103 [B1] tasks 1+6).
+which = "4.4"
 warp-workflows.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
