@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "ecc.install.v1",
+  "installedAt": "2026-05-02T21:05:05.787Z",
+  "target": {
+    "id": "codex-home",
+    "target": "codex",
+    "kind": "home",
+    "root": "/Users/aloe/Development/warp/.codex",
+    "installStatePath": "/Users/aloe/Development/warp/.codex/ecc-install-state.json"
+  },
+  "request": {
+    "profile": null,
+    "modules": [
+      "platform-configs"
+    ],
+    "includeComponents": [],
+    "excludeComponents": [],
+    "legacyLanguages": [],
+    "legacyMode": false
+  },
+  "resolution": {
+    "selectedModules": [
+      "platform-configs"
+    ],
+    "skippedModules": []
+  },
+  "source": {
+    "repoVersion": "1.10.0",
+    "repoCommit": null,
+    "manifestVersion": 1
+  },
+  "operations": [
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/.codex/AGENTS.md",
+      "sourceRelativePath": ".codex/AGENTS.md",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/AGENTS.md",
+      "strategy": "sync-root-children",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/.codex/agents/docs-researcher.toml",
+      "sourceRelativePath": ".codex/agents/docs-researcher.toml",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/agents/docs-researcher.toml",
+      "strategy": "sync-root-children",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/.codex/agents/explorer.toml",
+      "sourceRelativePath": ".codex/agents/explorer.toml",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/agents/explorer.toml",
+      "strategy": "sync-root-children",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/.codex/agents/reviewer.toml",
+      "sourceRelativePath": ".codex/agents/reviewer.toml",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/agents/reviewer.toml",
+      "strategy": "sync-root-children",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/.codex/config.toml",
+      "sourceRelativePath": ".codex/config.toml",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/config.toml",
+      "strategy": "sync-root-children",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/mcp-configs/mcp-servers.json",
+      "sourceRelativePath": "mcp-configs/mcp-servers.json",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/mcp-configs/mcp-servers.json",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    },
+    {
+      "kind": "copy-file",
+      "moduleId": "platform-configs",
+      "sourcePath": "/private/tmp/warp-ecc-npm-cache/_npx/a4e0d7bb9118c3eb/node_modules/ecc-universal/scripts/setup-package-manager.js",
+      "sourceRelativePath": "scripts/setup-package-manager.js",
+      "destinationPath": "/Users/aloe/Development/warp/.codex/scripts/setup-package-manager.js",
+      "strategy": "preserve-relative-path",
+      "ownership": "managed",
+      "scaffoldOnly": false
+    }
+  ]
+}
