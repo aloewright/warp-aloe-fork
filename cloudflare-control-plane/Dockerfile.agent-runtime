@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1.7
+#
+# Helm agent-runtime container image
+#
+# This image is launched by the SessionDO (PDX-20) on Cloudflare Containers
+# whenever a new agent runtime session is created. It carries the CLIs that
+# Warp/Helm agents shell into (`claude`, `codex`), plus `git` and `gh` so the
+# container can clone a workspace repo and push commits back. The agent's
+# /workspace directory is intended to be mounted from R2 (see
+# docs/agent-runtime-container.md) by the lifecycle code in PDX-20.
+#
+# Build:
+#   ./scripts/build-agent-runtime.sh
+# Or directly:
+#   docker build -t helm/agent-runtime -f Dockerfile.agent-runtime .
+
+FROM ubuntu:24.04
+
+# ---- build args / labels ----------------------------------------------------
+ARG GIT_SHA=unknown
+ARG BUILD_DATE=unknown
+ARG CLAUDE_CODE_VERSION=latest
+ARG CODEX_VERSION=latest
+
+LABEL org.opencontainers.image.title="helm-agent-runtime" \
+      org.opencontainers.image.description="Helm agent runtime: claude + codex + git + gh on ubuntu 24.04" \
+      org.opencontainers.image.source="https://github.com/aloewright/warp" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      helm.component="agent-runtime" \
+      helm.git-sha="${GIT_SHA}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    HELM_WORKSPACE=/workspace \
+    HELM_AGENT_USER=agent
+
+# ---- base packages ----------------------------------------------------------
+# Node.js 22.x via NodeSource (claude/codex CLIs are distributed via npm).
+# `gh` via the official GitHub CLI apt repo.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        jq \
+        locales \
+        openssh-client \
+        tini \
+        unzip \
+        xz-utils; \
+    locale-gen C.UTF-8; \
+    # Node.js 22.x
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    # GitHub CLI
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    # Cleanup
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# ---- agent CLIs (claude code + codex) --------------------------------------
+# Both CLIs ship via npm. Pinning is parameterized via build args so the
+# control plane can rev them independently of the base image.
+RUN set -eux; \
+    npm install -g \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@openai/codex@${CODEX_VERSION}"; \
+    # Smoke-check the binaries exist on PATH (versions may print to stderr).
+    command -v claude >/dev/null; \
+    command -v codex >/dev/null; \
+    npm cache clean --force
+
+# ---- non-root user ----------------------------------------------------------
+RUN set -eux; \
+    groupadd --system --gid 1001 "${HELM_AGENT_USER}"; \
+    useradd  --system --uid 1001 --gid 1001 \
+        --home-dir /home/"${HELM_AGENT_USER}" --create-home \
+        --shell /bin/bash "${HELM_AGENT_USER}"; \
+    mkdir -p "${HELM_WORKSPACE}"; \
+    chown -R "${HELM_AGENT_USER}:${HELM_AGENT_USER}" "${HELM_WORKSPACE}"
+
+# ---- entrypoint -------------------------------------------------------------
+COPY --chown=root:root scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
+RUN chmod 0755 /usr/local/bin/agent-entrypoint
+
+USER agent
+WORKDIR /workspace
+
+# tini reaps zombies and forwards signals; the entrypoint script handles
+# graceful shutdown on SIGTERM with a 30s grace window.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/agent-entrypoint"]
+CMD ["claude", "--help"]
