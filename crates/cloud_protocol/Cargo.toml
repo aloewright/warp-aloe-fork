@@ -1,0 +1,20 @@
+[package]
+name = "cloud_protocol"
+version = "0.1.0"
+edition = "2021"
+description = "JSON-over-WebSocket wire protocol for the Warp cloud control plane (PDX-17)."
+publish.workspace = true
+license.workspace = true
+
+# Transport-agnostic: pure types + serde. No tokio/async runtime.
+# Must compile to both native targets and wasm32-unknown-unknown so the same
+# crate can be consumed by the Rust client (PDX-18) and the helm-cloud
+# Cloudflare Worker (PDX-19) and Durable Objects (PDX-20).
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
