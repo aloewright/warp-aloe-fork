@@ -20,6 +20,15 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+# PDX-23 [C7] — KV namespace backing the helm auth flow:
+#   - Cloudflare Access JWKS cache  (key = `jwks:{teamDomain}`,    TTL 24h)
+#   - helm JWT denylist (logout)    (key = `denylist:jti:{jti}`,   TTL = JWT exp)
+# Replace `id` with the real namespace id after running:
+#   wrangler kv:namespace create AUTH_KV
+[[kv_namespaces]]
+binding = "AUTH_KV"
+id = "REPLACE_WITH_AUTH_KV_ID"
+
 # PDX-25 [D2] — references to the workflows defined in wrangler.workflows.toml.
 # `script_name` binds the workflow from the helm-workflows worker so the
 # control-plane Worker can create instances and dispatch events without
@@ -69,6 +78,10 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+[[env.dev.kv_namespaces]]
+binding = "AUTH_KV"
+id = "REPLACE_WITH_AUTH_KV_ID"
+
 [[env.dev.workflows]]
 binding = "SWARM_WORKFLOW"
 name = "swarm-workflow-dev"
@@ -106,6 +119,10 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+[[env.staging.kv_namespaces]]
+binding = "AUTH_KV"
+id = "REPLACE_WITH_AUTH_KV_ID"
+
 [[env.staging.workflows]]
 binding = "SWARM_WORKFLOW"
 name = "swarm-workflow-staging"
@@ -142,6 +159,10 @@ binding = "DB"
 database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
+
+[[env.production.kv_namespaces]]
+binding = "AUTH_KV"
+id = "REPLACE_WITH_AUTH_KV_ID"
 
 [[env.production.workflows]]
 binding = "SWARM_WORKFLOW"

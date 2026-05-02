@@ -1,7 +1,8 @@
+import { verifyHelmJwt, extractHelmJwt, type AuthEnv } from "../shared/auth.js";
 import { health, json, methodNotAllowed, notFound, requireAccess } from "../shared/http.js";
 import { manifestForRuntime, type HelmEnvironment } from "../shared/manifest.js";
 
-interface Env {
+interface Env extends AuthEnv {
   HELM_ENVIRONMENT: HelmEnvironment;
   HELM_VERSION: string;
   HELM_BUILD_ID: string;
@@ -24,6 +25,40 @@ export class RuntimeSessionCoordinator {
   }
 }
 
+/**
+ * Authenticate an inbound runtime request.
+ *
+ * Two acceptable shapes (in priority order):
+ *
+ *   1. Helm session JWT in `Authorization: Bearer <jwt>` — issued by the
+ *      control plane's `/api/auth/session` (PDX-23). This is the cheap,
+ *      cache-free path used by every authenticated client request.
+ *
+ *   2. Cloudflare Access JWT in `Cf-Access-Jwt-Assertion` — used for
+ *      operator / out-of-band traffic that bypasses the helm session
+ *      issuance flow (e.g. a dashboard ping). When `AUTH_KV` is not bound
+ *      on this Worker (PDX-21 reserves wrangler.agent-runtime.toml so we
+ *      cannot edit bindings here), JWKS caching is a no-op — verification
+ *      still works, just with the per-request JWKS fetch.
+ *
+ * The Access path requires `requireAccess` because that's also what the
+ * existing tests rely on. The helm path is preferred and short-circuits
+ * the Access fetch when present.
+ */
+async function requireRuntimeAuth(request: Request, env: Env): Promise<Response | null> {
+  const helmToken = extractHelmJwt(request);
+  if (helmToken && env.HELM_JWT_SIGNING_KEY) {
+    const result = await verifyHelmJwt(helmToken, {
+      signingKey: env.HELM_JWT_SIGNING_KEY,
+      authKv: env.AUTH_KV
+    });
+    if (result.ok) return null;
+    return json({ error: "unauthorized", reason: result.reason }, { status: 401 });
+  }
+  const manifest = manifestForRuntime(env);
+  return requireAccess(request, manifest.access, env.HELM_ENVIRONMENT, env.AUTH_KV);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -37,9 +72,8 @@ export default {
       });
     }
 
-    const manifest = manifestForRuntime(env);
-    const accessFailure = await requireAccess(request, manifest.access, env.HELM_ENVIRONMENT);
-    if (accessFailure) return accessFailure;
+    const authFailure = await requireRuntimeAuth(request, env);
+    if (authFailure) return authFailure;
 
     if (url.pathname === "/api/runtime/sessions") {
       if (request.method !== "POST") return methodNotAllowed();

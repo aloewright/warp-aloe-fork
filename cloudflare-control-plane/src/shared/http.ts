@@ -1,4 +1,5 @@
 import type { HelmEnvironment, HelmManifest } from "./manifest.js";
+import { fetchJwks } from "./auth.js";
 
 export interface HealthPayload {
   service: string;
@@ -71,25 +72,46 @@ function audienceMatches(actual: string | string[] | undefined, expected?: strin
   return actual === expected;
 }
 
-async function verifyAccessJwt(jwt: string, teamDomain: string, expectedAudience?: string): Promise<boolean> {
+/**
+ * Verify a Cloudflare Access JWT.
+ *
+ * PDX-23 refactor: JWKS lookup now goes through {@link fetchJwks}, which
+ * caches certs in `AUTH_KV` for 24h (Phase C audit recommendation). Pass
+ * the KV binding through `authKv` to opt in. When the binding is absent
+ * the function falls back to the original live-fetch behaviour so this
+ * stays drop-in compatible.
+ *
+ * The decoded payload is also surfaced (as the resolved value) so callers
+ * that need `sub` / `email` (e.g. `/api/auth/session` to issue the helm
+ * session JWT) don't have to decode the JWT a second time.
+ */
+export interface AccessVerificationResult {
+  ok: boolean;
+  payload?: AccessJwtPayload & { sub?: string; email?: string };
+}
+
+export async function verifyAccessJwt(
+  jwt: string,
+  teamDomain: string,
+  expectedAudience?: string,
+  authKv?: KVNamespace,
+): Promise<AccessVerificationResult> {
   const [headerPart, payloadPart, signaturePart] = jwt.split(".");
-  if (!headerPart || !payloadPart || !signaturePart) return false;
+  if (!headerPart || !payloadPart || !signaturePart) return { ok: false };
 
   const header = decodeJson<AccessJwtHeader>(headerPart);
-  if (header.alg !== "RS256" || !header.kid) return false;
+  if (header.alg !== "RS256" || !header.kid) return { ok: false };
 
-  const payload = decodeJson<AccessJwtPayload>(payloadPart);
+  const payload = decodeJson<AccessJwtPayload & { sub?: string; email?: string }>(payloadPart);
   const now = Math.floor(Date.now() / 1000);
-  if (payload.exp != null && payload.exp <= now) return false;
-  if (payload.nbf != null && payload.nbf > now) return false;
-  if (!audienceMatches(payload.aud, expectedAudience)) return false;
+  if (payload.exp != null && payload.exp <= now) return { ok: false };
+  if (payload.nbf != null && payload.nbf > now) return { ok: false };
+  if (!audienceMatches(payload.aud, expectedAudience)) return { ok: false };
 
-  const certsUrl = `https://${teamDomain}/cdn-cgi/access/certs`;
-  const certsResponse = await fetch(certsUrl);
-  if (!certsResponse.ok) return false;
-  const certs = (await certsResponse.json()) as AccessCerts;
+  const certs = await fetchJwks(teamDomain, authKv);
+  if (!certs) return { ok: false };
   const jwk = certs.keys?.find((key) => key.kid === header.kid);
-  if (!jwk) return false;
+  if (!jwk) return { ok: false };
 
   const key = await crypto.subtle.importKey(
     "jwk",
@@ -99,27 +121,34 @@ async function verifyAccessJwt(jwt: string, teamDomain: string, expectedAudience
     ["verify"],
   );
 
-  return crypto.subtle.verify(
+  const valid = await crypto.subtle.verify(
     "RSASSA-PKCS1-v1_5",
     key,
     base64UrlDecode(signaturePart),
     new TextEncoder().encode(`${headerPart}.${payloadPart}`),
   );
+  if (!valid) return { ok: false };
+  return { ok: true, payload };
 }
 
 export async function requireAccess(
   request: Request,
   access: HelmManifest["access"],
   environment: HelmEnvironment,
+  authKv?: KVNamespace,
 ): Promise<Response | null> {
   if (!access.required) return null;
 
   const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
   if (jwt) {
     try {
-      if (await verifyAccessJwt(jwt, access.teamDomain, access.audiences[environment])) {
-        return null;
-      }
+      const result = await verifyAccessJwt(
+        jwt,
+        access.teamDomain,
+        access.audiences[environment],
+        authKv,
+      );
+      if (result.ok) return null;
     } catch {
       return json(
         {
