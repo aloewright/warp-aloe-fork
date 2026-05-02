@@ -20,10 +20,14 @@ use instant::Instant;
 use tokio::sync::RwLock;
 
 mod picker;
+mod refetch;
 mod runner;
 mod status;
 
 pub use picker::{bind_project, list_configs, list_projects, DopplerConfig, DopplerProject};
+pub use refetch::{
+    with_refetch_on_unauthorized, with_refetch_on_unauthorized_using_runner, RefetchError,
+};
 pub use runner::{CommandRunner, TokioCommandRunner};
 pub use status::{parse_configure_all, read_status, DopplerStatus, ScopedBinding};
 
