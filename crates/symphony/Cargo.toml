@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 orchestrator = { workspace = true }
 agents = { workspace = true }
+auto_healing = { workspace = true }
 doppler = { workspace = true }
 cron_scheduler = { workspace = true }
 github_webhook_receiver = { workspace = true }

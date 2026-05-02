@@ -31,6 +31,8 @@ pub enum AuditEventKind {
     Failed,
     /// Diff guard rejected the run for being too large.
     DiffGuardExceeded,
+    /// Test-deletion guardrail rejected the run.
+    TestDeletionBlocked,
     /// Workflow tick boundary.
     Tick,
     /// An in-flight agent run exceeded `agent.stall_timeout_ms` since
