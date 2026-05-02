@@ -16,6 +16,7 @@ pub mod audit;
 pub mod diff_guard;
 pub mod orchestrator;
 pub mod tracker;
+pub mod triggers;
 pub mod workflow;
 pub mod workspace;
 
@@ -23,8 +24,9 @@ pub use audit::{AuditEvent, AuditLog};
 pub use diff_guard::{DiffGuard, DiffGuardError, DiffStat};
 pub use orchestrator::{Orchestrator, OrchestratorError};
 pub use tracker::{BlockerRef, Issue, LinearClient, TrackerError};
+pub use triggers::{spawn_triggers, TriggerError, TriggerSurfaces};
 pub use workflow::{
-    AgentConfig, HooksConfig, PollingConfig, TrackerConfig, WorkflowConfig, WorkflowDefinition,
-    WorkflowError, WorkspaceConfig,
+    AgentConfig, CronJobConfig, HooksConfig, PollingConfig, ServerConfig, TrackerConfig,
+    WebhookConfig, WorkflowConfig, WorkflowDefinition, WorkflowError, WorkspaceConfig,
 };
 pub use workspace::{Workspace, WorkspaceError, WorkspaceManager};

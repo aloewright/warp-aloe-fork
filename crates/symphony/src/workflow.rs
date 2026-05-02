@@ -39,6 +39,11 @@ pub struct WorkflowConfig {
     /// Agent dispatch knobs.
     #[serde(default)]
     pub agent: AgentConfig,
+    /// Optional `server` extension (PDX-26 D3): cron triggers and the
+    /// HMAC-validated webhook receiver. When omitted, neither surface
+    /// is started.
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 /// Tracker block.
@@ -237,6 +242,56 @@ fn default_max_turns() -> usize {
 }
 fn default_agent_label_required() -> String {
     "agent:claude".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// `server` extension — PDX-26 D3 (cron triggers + webhook receiver).
+// ---------------------------------------------------------------------------
+
+/// Optional `server` block for cron triggers and the GitHub/Slack/generic
+/// webhook receiver. Both sub-blocks are optional and independent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// Configured cron jobs (5-field UTC expressions). Empty disables.
+    #[serde(default)]
+    pub cron_jobs: Vec<CronJobConfig>,
+    /// Webhook receiver block. `None` disables the receiver entirely.
+    #[serde(default)]
+    pub webhook: Option<WebhookConfig>,
+}
+
+/// One cron-driven trigger.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronJobConfig {
+    /// Job name, unique within the daemon.
+    pub name: String,
+    /// 5-field cron expression in UTC: `min hour dom mon dow`.
+    pub cron: String,
+    /// Opaque payload echoed back when the schedule fires; consumed by
+    /// downstream handlers (e.g. Linear-issue templates, agent kickoffs).
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+/// Webhook receiver block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// Bind address. Defaults to `127.0.0.1:9278`.
+    #[serde(default = "default_webhook_bind")]
+    pub bind: std::net::SocketAddr,
+    /// HMAC secret for `/webhook/github`. Empty disables the route.
+    #[serde(default)]
+    pub github_secret: String,
+    /// HMAC secret for `/webhook/slack`. Empty disables the route.
+    #[serde(default)]
+    pub slack_secret: String,
+    /// HMAC secret for `/webhook/generic`. Empty disables the route.
+    #[serde(default)]
+    pub generic_secret: String,
+}
+
+fn default_webhook_bind() -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], 9278))
 }
 
 /// Errors raised by the workflow loader.

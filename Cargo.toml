@@ -24,6 +24,8 @@ default-members = [
   "crates/skills",
   "crates/template_hooks",
   "crates/templates",
+  "crates/cron_scheduler",
+  "crates/github_webhook_receiver",
   "crates/sum_tree",
   "crates/symphony",
   "crates/warpui",
@@ -49,6 +51,8 @@ cloud_protocol = { path = "crates/cloud_protocol" }
 command = { path = "crates/command" }
 command-signatures-v2 = { path = "crates/command-signatures-v2" }
 computer_use = { path = "crates/computer_use" }
+cron_scheduler = { path = "crates/cron_scheduler" }
+github_webhook_receiver = { path = "crates/github_webhook_receiver" }
 doppler = { path = "crates/doppler" }
 doppler_mcp = { path = "crates/doppler_mcp" }
 field_mask = { path = "crates/field_mask" }

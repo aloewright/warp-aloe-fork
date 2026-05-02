@@ -3458,6 +3458,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cron_scheduler"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5490,6 +5502,25 @@ dependencies = [
  "libgit2-sys",
  "log",
  "url",
+]
+
+[[package]]
+name = "github_webhook_receiver"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "hex",
+ "hyper 1.8.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
 ]
 
 [[package]]
@@ -12685,8 +12716,10 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "cron_scheduler",
  "doppler",
  "futures-util",
+ "github_webhook_receiver",
  "liquid",
  "mockall",
  "orchestrator",
