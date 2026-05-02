@@ -183,15 +183,21 @@ pub struct ProfileModelSelector {
     manage_api_key_button: ViewHandle<ActionButton>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     all_model_choices: Vec<LLMInfo>,
-    /// Per-session pin of which Claude Code model the next turn should
-    /// dispatch through. `None` means "use the normal Router tie-break".
+    /// Per-session pin of which CLI agent the next turn should dispatch
+    /// through. `None` means "use the normal Router tie-break".
+    ///
+    /// PDX-104 [B2] task 6 generalized this from a Claude-Code-only
+    /// `Option<ClaudeCodeOption>` to a richer `(Provider, ModelVariant)`
+    /// tuple via [`PinnedAgent`] so Codex and Ollama can also be pinned
+    /// in-prompt. The Claude Code accessor [`Self::pinned_claude_code_model`]
+    /// is preserved for backwards compatibility.
     ///
     /// TODO(PDX-103 B1 task 2): once the Router lives on `AppContext`, this
     /// pin should move to a per-session struct that the AgentDriver reads
     /// during dispatch (and that survives selector teardown). For now we
     /// keep it on the selector itself, which is per-`terminal_view_id`,
     /// so it persists across menu opens within the same terminal session.
-    pinned_claude_code_model: Option<ClaudeCodeOption>,
+    pinned_agent: Option<PinnedAgent>,
 }
 
 pub enum ProfileModelSelectorEvent {
@@ -216,6 +222,18 @@ pub enum ProfileModelSelectorAction {
     /// Open the AI settings page anchored to the `CliAgentSignInWidget`
     /// (added on the sibling `pdx-103-b1-cli-agent-signin-ui` branch).
     OpenClaudeCodeSignIn,
+    /// PDX-104 [B2] task 6: pin the next turn to a Codex model. Same
+    /// dispatch shape as `SelectClaudeCodeModel`, just for `Provider::Codex`.
+    SelectCodexModel(CodexOption),
+    /// PDX-104 [B2] task 6: deep-link to the Codex sign-in row in the AI
+    /// settings widget. Emits `OpenSettings(SettingsSection::AI)`.
+    OpenCodexSignIn,
+    /// PDX-104 [B2] task 6: pin the next turn to a locally pulled Ollama
+    /// model. Provider::Ollama is local-only — no auth, no budget.
+    SelectOllamaModel(OllamaOption),
+    /// PDX-104 [B2] task 6: deep-link to the Ollama install row in the
+    /// AI settings widget. Emits `OpenSettings(SettingsSection::AI)`.
+    OpenOllamaSignIn,
 }
 
 /// In-prompt selector entry identifying a Claude Code model variant.
@@ -261,6 +279,107 @@ impl ClaudeCodeOption {
     /// Ordered list of options surfaced in the in-prompt selector.
     pub fn all() -> &'static [ClaudeCodeOption] {
         &[ClaudeCodeOption::Sonnet46]
+    }
+}
+
+/// In-prompt selector entry identifying a Codex model variant
+/// (PDX-104 [B2] task 6).
+///
+/// Mirrors the shape of [`ClaudeCodeOption`] — a small wasm-safe enum
+/// rather than a re-export of `agents::CodexAgent`'s profile knobs, so
+/// the action enum stays buildable with the agents crate excluded on
+/// the WASM target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CodexOption {
+    /// GPT-5.5 priority queue — `Fast` service tier with `Medium` reasoning.
+    Gpt55Fast,
+    /// GPT-5.5 default queue — `Standard` service tier with `Medium` reasoning.
+    Gpt55Standard,
+}
+
+impl CodexOption {
+    /// Human-readable label rendered in the menu row.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            CodexOption::Gpt55Fast => "Codex GPT-5.5 (fast)",
+            CodexOption::Gpt55Standard => "Codex GPT-5.5 (standard)",
+        }
+    }
+
+    /// Stable position-id slug used for layout anchoring and tests.
+    pub fn position_slug(self) -> &'static str {
+        match self {
+            CodexOption::Gpt55Fast => "codex_gpt55_fast",
+            CodexOption::Gpt55Standard => "codex_gpt55_standard",
+        }
+    }
+
+    /// Ordered list of options surfaced in the in-prompt selector.
+    pub fn all() -> &'static [CodexOption] {
+        &[CodexOption::Gpt55Fast, CodexOption::Gpt55Standard]
+    }
+}
+
+/// In-prompt selector entry identifying an Ollama model variant
+/// (PDX-104 [B2] task 6).
+///
+/// Local inference only — no auth surface. The default option matches
+/// `local_orchestrator::OLLAMA_DEFAULT_MODEL`. Future revisions will
+/// enumerate locally pulled models dynamically; for now we surface the
+/// default plus a small fixed list as a placeholder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OllamaOption {
+    /// `qwen2.5-coder` — the default local-coder model the registration
+    /// helper provisions in `local_orchestrator::ensure_ollama_registered`.
+    Qwen25Coder,
+}
+
+impl OllamaOption {
+    /// Human-readable label rendered in the menu row.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            OllamaOption::Qwen25Coder => "Ollama qwen2.5-coder",
+        }
+    }
+
+    /// Stable position-id slug used for layout anchoring and tests.
+    pub fn position_slug(self) -> &'static str {
+        match self {
+            OllamaOption::Qwen25Coder => "ollama_qwen25_coder",
+        }
+    }
+
+    /// Ordered list of options surfaced in the in-prompt selector.
+    pub fn all() -> &'static [OllamaOption] {
+        &[OllamaOption::Qwen25Coder]
+    }
+}
+
+/// Identifies the currently-pinned CLI agent + model variant for the
+/// session (PDX-104 [B2] task 6).
+///
+/// Generalizes the prior `Option<ClaudeCodeOption>` field on
+/// [`ProfileModelSelector`] so all three providers can be pinned. The
+/// underlying provider falls out of the variant, used by the dispatcher
+/// to pick the right registered `Agent` (see
+/// `local_orchestrator::run_via_local_orchestrator`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinnedAgent {
+    Claude(ClaudeCodeOption),
+    Codex(CodexOption),
+    Ollama(OllamaOption),
+}
+
+impl PinnedAgent {
+    /// Map to the underlying [`orchestrator::Provider`] used by the
+    /// dispatcher to bypass the Router tie-break.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn provider(self) -> orchestrator::Provider {
+        match self {
+            PinnedAgent::Claude(_) => orchestrator::Provider::ClaudeCode,
+            PinnedAgent::Codex(_) => orchestrator::Provider::Codex,
+            PinnedAgent::Ollama(_) => orchestrator::Provider::Ollama,
+        }
     }
 }
 
@@ -333,6 +452,131 @@ pub(crate) fn build_claude_code_menu_items(
             MenuItemFields::new("Sign in to Claude Code…")
                 .with_icon(Icon::Gear)
                 .with_on_select_action(ProfileModelSelectorAction::OpenClaudeCodeSignIn),
+        ));
+    }
+
+    items
+}
+
+/// Build the "Codex" section appended below the Claude Code group
+/// (PDX-104 [B2] task 6).
+///
+/// Mirrors [`build_claude_code_menu_items`]:
+///
+/// * `health_states` — pairs of `(option, is_healthy)`. Unhealthy entries
+///   render disabled with a right-side "Sign in" hint and a tooltip; an
+///   extra "Sign in to Codex" entry is appended that emits
+///   `OpenCodexSignIn` so users can sign in without leaving the prompt.
+/// * `pinned` — the option currently pinned for the session, marked with
+///   a check icon. Pass `None` for "no pin".
+pub(crate) fn build_codex_menu_items(
+    health_states: &[(CodexOption, bool)],
+    pinned: Option<CodexOption>,
+) -> Vec<MenuItem<ProfileModelSelectorAction>> {
+    let mut items: Vec<MenuItem<ProfileModelSelectorAction>> = Vec::new();
+    if health_states.is_empty() {
+        return items;
+    }
+
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Header {
+        fields: MenuItemFields::new("Codex"),
+        clickable: false,
+        right_side_fields: None,
+    });
+
+    let mut any_unhealthy = false;
+    for (option, healthy) in health_states {
+        let mut fields = MenuItemFields::new(option.display_name())
+            .with_on_select_action(ProfileModelSelectorAction::SelectCodexModel(*option));
+
+        if pinned == Some(*option) {
+            fields = fields.with_icon(Icon::Check);
+        } else {
+            fields = fields.with_indent();
+        }
+
+        if !*healthy {
+            any_unhealthy = true;
+            fields = fields
+                .with_disabled(true)
+                .with_tooltip("Sign in to Codex in Settings → AI to enable this model.")
+                .with_right_side_label(
+                    "Sign in",
+                    FontProperties::default()
+                        .style(FontStyle::Italic)
+                        .weight(FontWeight::Medium),
+                );
+        }
+
+        items.push(MenuItem::Item(fields));
+    }
+
+    if any_unhealthy {
+        items.push(MenuItem::Item(
+            MenuItemFields::new("Sign in to Codex…")
+                .with_icon(Icon::Gear)
+                .with_on_select_action(ProfileModelSelectorAction::OpenCodexSignIn),
+        ));
+    }
+
+    items
+}
+
+/// Build the "Ollama" section appended below the Codex group
+/// (PDX-104 [B2] task 6).
+///
+/// Ollama is local-only, so the *unhealthy* affordance is "Install Ollama"
+/// rather than "Sign in" — the row points at the install page instead of
+/// running an OAuth flow.
+pub(crate) fn build_ollama_menu_items(
+    health_states: &[(OllamaOption, bool)],
+    pinned: Option<OllamaOption>,
+) -> Vec<MenuItem<ProfileModelSelectorAction>> {
+    let mut items: Vec<MenuItem<ProfileModelSelectorAction>> = Vec::new();
+    if health_states.is_empty() {
+        return items;
+    }
+
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Header {
+        fields: MenuItemFields::new("Ollama"),
+        clickable: false,
+        right_side_fields: None,
+    });
+
+    let mut any_unhealthy = false;
+    for (option, healthy) in health_states {
+        let mut fields = MenuItemFields::new(option.display_name())
+            .with_on_select_action(ProfileModelSelectorAction::SelectOllamaModel(*option));
+
+        if pinned == Some(*option) {
+            fields = fields.with_icon(Icon::Check);
+        } else {
+            fields = fields.with_indent();
+        }
+
+        if !*healthy {
+            any_unhealthy = true;
+            fields = fields
+                .with_disabled(true)
+                .with_tooltip("Install Ollama and pull this model to enable it.")
+                .with_right_side_label(
+                    "Install",
+                    FontProperties::default()
+                        .style(FontStyle::Italic)
+                        .weight(FontWeight::Medium),
+                );
+        }
+
+        items.push(MenuItem::Item(fields));
+    }
+
+    if any_unhealthy {
+        items.push(MenuItem::Item(
+            MenuItemFields::new("Install Ollama…")
+                .with_icon(Icon::Gear)
+                .with_on_select_action(ProfileModelSelectorAction::OpenOllamaSignIn),
         ));
     }
 
@@ -687,7 +931,7 @@ impl ProfileModelSelector {
             manage_api_key_button,
             terminal_model,
             all_model_choices: Vec::new(),
-            pinned_claude_code_model: None,
+            pinned_agent: None,
         };
         me.refresh_state(ctx);
         me
@@ -739,9 +983,38 @@ impl ProfileModelSelector {
     ///
     /// Used by `AgentDriver` to force-route the next turn through
     /// `Provider::ClaudeCode`, bypassing the Router's normal Role + budget
-    /// tie-break. Returns `None` when no Claude Code model is pinned.
+    /// tie-break. Returns `None` when no Claude Code model is pinned (or
+    /// when a non-Claude provider is pinned). PDX-104 [B2] task 6
+    /// generalized the storage to [`PinnedAgent`]; this accessor narrows
+    /// the result back down for legacy callers.
     pub fn pinned_claude_code_model(&self) -> Option<ClaudeCodeOption> {
-        self.pinned_claude_code_model
+        match self.pinned_agent {
+            Some(PinnedAgent::Claude(opt)) => Some(opt),
+            _ => None,
+        }
+    }
+
+    /// Currently-pinned Codex option for this session, if any.
+    /// PDX-104 [B2] task 6.
+    pub fn pinned_codex_model(&self) -> Option<CodexOption> {
+        match self.pinned_agent {
+            Some(PinnedAgent::Codex(opt)) => Some(opt),
+            _ => None,
+        }
+    }
+
+    /// Currently-pinned Ollama option for this session, if any.
+    /// PDX-104 [B2] task 6.
+    pub fn pinned_ollama_model(&self) -> Option<OllamaOption> {
+        match self.pinned_agent {
+            Some(PinnedAgent::Ollama(opt)) => Some(opt),
+            _ => None,
+        }
+    }
+
+    /// Cross-provider pin accessor. PDX-104 [B2] task 6.
+    pub fn pinned_agent(&self) -> Option<PinnedAgent> {
+        self.pinned_agent
     }
 
     /// Live health probe for a Claude Code option.
@@ -766,6 +1039,65 @@ impl ProfileModelSelector {
                         .to_string(),
                 ),
             };
+            crate::ai::agent_sdk::driver::local_orchestrator::agent_health_snapshot(&id)
+                .map(|h| h.healthy)
+                .unwrap_or(false)
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = option;
+            false
+        }
+    }
+
+    /// Live health probe for a Codex option (PDX-104 [B2] task 6).
+    ///
+    /// Reads from the persistent Router exactly like
+    /// [`Self::claude_code_option_healthy`]. The Codex CodexAgent
+    /// constructor only probes the binary; the auth state (signed-in /
+    /// signed-out) lives in `~/.codex/auth.json` and is consulted
+    /// separately so the menu entry can render disabled with a sign-in
+    /// affordance even when the binary is on `PATH`.
+    fn codex_option_healthy(&self, option: CodexOption) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use orchestrator::AgentId;
+            let id = AgentId(
+                crate::ai::agent_sdk::driver::local_orchestrator::CODEX_WORKER_ID.to_string(),
+            );
+            let registered = crate::ai::agent_sdk::driver::local_orchestrator::agent_health_snapshot(&id)
+                .map(|h| h.healthy)
+                .unwrap_or(false);
+            // Gate on auth: even a registered Codex agent should render
+            // disabled until the user is signed in.
+            let signed_in = matches!(
+                crate::ai::agent_sdk::driver::local_orchestrator::codex_signed_in(),
+                Some(true)
+            );
+            let _ = option;
+            registered && signed_in
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = option;
+            false
+        }
+    }
+
+    /// Live health probe for an Ollama option (PDX-104 [B2] task 6).
+    ///
+    /// Ollama has no auth surface, so this just checks whether the
+    /// agent is registered in the persistent Router (which already
+    /// requires the binary to be on `PATH` and the model to be
+    /// available — see `local_orchestrator::ensure_ollama_registered`).
+    fn ollama_option_healthy(&self, option: OllamaOption) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use orchestrator::AgentId;
+            let id = AgentId(
+                crate::ai::agent_sdk::driver::local_orchestrator::OLLAMA_WORKER_ID.to_string(),
+            );
+            let _ = option;
             crate::ai::agent_sdk::driver::local_orchestrator::agent_health_snapshot(&id)
                 .map(|h| h.healthy)
                 .unwrap_or(false)
@@ -1018,18 +1350,33 @@ impl ProfileModelSelector {
             ctx,
         );
 
-        // Append the Claude Code section under the existing model list.
-        // Each option is health-aware: when the underlying agent is
-        // unhealthy (signed-out / binary missing), we render it disabled
-        // with an inline "Sign in" affordance that deep-links back into the
-        // AI settings page where `CliAgentSignInWidget` lives (added on the
-        // sibling `pdx-103-b1-cli-agent-signin-ui` branch).
-        let pinned = self.pinned_claude_code_model;
-        let health_states: Vec<(ClaudeCodeOption, bool)> = ClaudeCodeOption::all()
+        // Append the CLI-agent groups (Claude Code → Codex → Ollama) under
+        // the existing model list. Each group is health-aware: when an
+        // option is unhealthy (signed-out / binary missing / not pulled),
+        // the row renders disabled with an inline "Sign in" / "Install"
+        // affordance that deep-links back into the AI settings page where
+        // `CliAgentSignInWidget` lives. PDX-104 [B2] task 6: ordering is
+        // Claude Code → Codex → Ollama, matching the settings widget.
+        let pinned_claude = self.pinned_claude_code_model();
+        let claude_health: Vec<(ClaudeCodeOption, bool)> = ClaudeCodeOption::all()
             .iter()
             .map(|o| (*o, self.claude_code_option_healthy(*o)))
             .collect();
-        items.extend(build_claude_code_menu_items(&health_states, pinned));
+        items.extend(build_claude_code_menu_items(&claude_health, pinned_claude));
+
+        let pinned_codex = self.pinned_codex_model();
+        let codex_health: Vec<(CodexOption, bool)> = CodexOption::all()
+            .iter()
+            .map(|o| (*o, self.codex_option_healthy(*o)))
+            .collect();
+        items.extend(build_codex_menu_items(&codex_health, pinned_codex));
+
+        let pinned_ollama = self.pinned_ollama_model();
+        let ollama_health: Vec<(OllamaOption, bool)> = OllamaOption::all()
+            .iter()
+            .map(|o| (*o, self.ollama_option_healthy(*o)))
+            .collect();
+        items.extend(build_ollama_menu_items(&ollama_health, pinned_ollama));
 
         let selected_index = Self::find_selected_index(&items, active_llm);
         self.model_dropdown.update(ctx, |menu, ctx| {
@@ -2047,7 +2394,7 @@ impl TypedActionView for ProfileModelSelector {
                     option,
                     self.terminal_view_id
                 );
-                self.pinned_claude_code_model = Some(*option);
+                self.pinned_agent = Some(PinnedAgent::Claude(*option));
                 // PDX-103 [B1] task 7c: latch the next AgentDriver Oz
                 // dispatch onto Provider::ClaudeCode. Consume-and-clear
                 // semantics live inside the helper so the pin never
@@ -2064,6 +2411,42 @@ impl TypedActionView for ProfileModelSelector {
                 // `pdx-103-b1-cli-agent-signin-ui` branch and renders inside
                 // `SettingsSection::AI`; once that branch lands we can
                 // anchor more precisely (e.g. via a scroll-to fragment).
+                ctx.emit(ProfileModelSelectorEvent::OpenSettings(
+                    SettingsSection::AI,
+                ));
+            }
+            ProfileModelSelectorAction::SelectCodexModel(option) => {
+                log::info!(
+                    "Pinning Codex option {:?} for terminal {:?}",
+                    option,
+                    self.terminal_view_id
+                );
+                self.pinned_agent = Some(PinnedAgent::Codex(*option));
+                // The latch surface for non-Claude providers is part of
+                // PDX-105's McpForwarder wiring (B3); for now the pin is
+                // recorded on the selector and read by the dispatcher
+                // via `pinned_agent()`.
+                self.set_model_menu_visibility(false, ctx);
+                ctx.notify();
+            }
+            ProfileModelSelectorAction::OpenCodexSignIn => {
+                self.set_model_menu_visibility(false, ctx);
+                ctx.emit(ProfileModelSelectorEvent::OpenSettings(
+                    SettingsSection::AI,
+                ));
+            }
+            ProfileModelSelectorAction::SelectOllamaModel(option) => {
+                log::info!(
+                    "Pinning Ollama option {:?} for terminal {:?}",
+                    option,
+                    self.terminal_view_id
+                );
+                self.pinned_agent = Some(PinnedAgent::Ollama(*option));
+                self.set_model_menu_visibility(false, ctx);
+                ctx.notify();
+            }
+            ProfileModelSelectorAction::OpenOllamaSignIn => {
+                self.set_model_menu_visibility(false, ctx);
                 ctx.emit(ProfileModelSelectorEvent::OpenSettings(
                     SettingsSection::AI,
                 ));
@@ -2352,5 +2735,96 @@ mod tests {
     #[test]
     fn claude_code_option_all_starts_with_sonnet_46() {
         assert_eq!(ClaudeCodeOption::all().first(), Some(&ClaudeCodeOption::Sonnet46));
+    }
+
+    // ── PDX-104 [B2] task 6 — Codex menu builder ──────────────────────
+
+    #[test]
+    fn build_codex_menu_items_empty_when_no_options() {
+        let items = build_codex_menu_items(&[], None);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn build_codex_menu_items_emits_select_action_for_each_option() {
+        let items = build_codex_menu_items(
+            &[
+                (CodexOption::Gpt55Fast, true),
+                (CodexOption::Gpt55Standard, true),
+            ],
+            None,
+        );
+        let n = count_actions(&items, |a| {
+            matches!(a, ProfileModelSelectorAction::SelectCodexModel(_))
+        });
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn build_codex_menu_items_disabled_with_signin_when_unhealthy() {
+        let items = build_codex_menu_items(&[(CodexOption::Gpt55Fast, false)], None);
+        let any_disabled = items.iter().any(|item| match item {
+            MenuItem::Item(fields) => fields.is_disabled(),
+            _ => false,
+        });
+        assert!(any_disabled, "expected unhealthy Codex row to be disabled");
+
+        let n = count_actions(&items, |a| {
+            matches!(a, ProfileModelSelectorAction::OpenCodexSignIn)
+        });
+        assert_eq!(n, 1, "expected one OpenCodexSignIn entry");
+    }
+
+    // ── PDX-104 [B2] task 6 — Ollama menu builder ─────────────────────
+
+    #[test]
+    fn build_ollama_menu_items_empty_when_no_options() {
+        let items = build_ollama_menu_items(&[], None);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn build_ollama_menu_items_emits_select_action() {
+        let items = build_ollama_menu_items(&[(OllamaOption::Qwen25Coder, true)], None);
+        let n = count_actions(&items, |a| {
+            matches!(a, ProfileModelSelectorAction::SelectOllamaModel(_))
+        });
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn build_ollama_menu_items_disabled_with_install_when_unhealthy() {
+        let items = build_ollama_menu_items(&[(OllamaOption::Qwen25Coder, false)], None);
+        let any_disabled = items.iter().any(|item| match item {
+            MenuItem::Item(fields) => fields.is_disabled(),
+            _ => false,
+        });
+        assert!(any_disabled, "expected unhealthy Ollama row to be disabled");
+
+        let n = count_actions(&items, |a| {
+            matches!(a, ProfileModelSelectorAction::OpenOllamaSignIn)
+        });
+        assert_eq!(n, 1, "expected one OpenOllamaSignIn entry");
+    }
+
+    // ── PinnedAgent narrowing ─────────────────────────────────────────
+
+    #[test]
+    fn pinned_agent_provider_returns_correct_provider_for_each_variant() {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            assert_eq!(
+                PinnedAgent::Claude(ClaudeCodeOption::Sonnet46).provider(),
+                orchestrator::Provider::ClaudeCode
+            );
+            assert_eq!(
+                PinnedAgent::Codex(CodexOption::Gpt55Fast).provider(),
+                orchestrator::Provider::Codex
+            );
+            assert_eq!(
+                PinnedAgent::Ollama(OllamaOption::Qwen25Coder).provider(),
+                orchestrator::Provider::Ollama
+            );
+        }
     }
 }

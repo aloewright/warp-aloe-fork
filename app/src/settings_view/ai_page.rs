@@ -2291,6 +2291,20 @@ pub enum AISettingsPageAction {
     /// Auth-state re-poll lands when PDX-103 task 2 hoists the Router into
     /// AppContext.
     SignInWithClaudeCode,
+    /// PDX-104 [B2] task 5: shells out `codex login` fire-and-forget.
+    /// The Codex CLI handles the OAuth flow and writes `~/.codex/auth.json`;
+    /// the widget re-polls the auth-state probe on a bounded retry loop so
+    /// the persistent Router picks up the now-signed-in CLI without an
+    /// app restart.
+    SignInWithCodex,
+    /// PDX-104 [B2] task 5: opens https://ollama.com/download in the
+    /// system browser. Ollama is local-only, so there's no sign-in flow —
+    /// the row only renders an *installed / not installed* state.
+    OpenOllamaInstall,
+    /// PDX-104 [B2] task 5: re-runs `OllamaAgent::new(...)` against the
+    /// persistent Router so newly pulled models become routable without
+    /// an app restart. No-op when `ollama` is not on `PATH`.
+    ReloadOllamaModels,
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -2575,6 +2589,98 @@ impl TypedActionView for AISettingsPageView {
                         }
                         Err(err) => log::warn!("failed to spawn `claude /login`: {err}"),
                     }
+                }
+                ctx.notify();
+            }
+            AISettingsPageAction::SignInWithCodex => {
+                // PDX-104 [B2] task 5. Same pattern as `SignInWithClaudeCode`:
+                // detached `codex login` whose stdio is /dev/null'd so the
+                // child does not block on the missing GUI TTY.
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    match std::process::Command::new("codex")
+                        .arg("login")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                    {
+                        Ok(_child) => {
+                            // Re-poll registration on a bounded loop so the
+                            // persistent Router picks up the now-signed-in
+                            // CLI without an app restart. Mirrors the
+                            // `SignInWithClaudeCode` arm above.
+                            let _ = ctx.spawn(
+                                async move {
+                                    let deadline = std::time::Instant::now()
+                                        + std::time::Duration::from_secs(120);
+                                    while std::time::Instant::now() < deadline {
+                                        warpui::r#async::Timer::after(
+                                            std::time::Duration::from_secs(3),
+                                        )
+                                        .await;
+                                        crate::ai::agent_sdk::driver::local_orchestrator::refresh_codex_registration().await;
+                                        if let Some(true) = crate::ai::agent_sdk::driver::local_orchestrator::codex_signed_in() {
+                                            return true;
+                                        }
+                                    }
+                                    false
+                                },
+                                |_me, _success, ctx| {
+                                    ctx.notify();
+                                },
+                            );
+                        }
+                        Err(err) => log::warn!("failed to spawn `codex login`: {err}"),
+                    }
+                }
+                ctx.notify();
+            }
+            AISettingsPageAction::OpenOllamaInstall => {
+                // PDX-104 [B2] task 5. Ollama is local-only — open the
+                // download page rather than running an OAuth flow. Uses
+                // platform-native browser launchers (`open` on macOS,
+                // `xdg-open` on Linux) detached from the app process.
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open")
+                        .arg("https://ollama.com/download")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+                #[cfg(all(unix, not(target_os = "macos"), not(target_family = "wasm")))]
+                {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg("https://ollama.com/download")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "https://ollama.com/download"])
+                        .spawn();
+                }
+                ctx.notify();
+            }
+            AISettingsPageAction::ReloadOllamaModels => {
+                // PDX-104 [B2] task 5. Re-run registration so newly pulled
+                // models become routable without an app restart.
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let _ = ctx.spawn(
+                        async {
+                            crate::ai::agent_sdk::driver::local_orchestrator::refresh_ollama_registration().await;
+                            true
+                        },
+                        |_me, _ok, ctx| {
+                            ctx.notify();
+                        },
+                    );
                 }
                 ctx.notify();
             }
