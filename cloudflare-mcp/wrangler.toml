@@ -19,4 +19,27 @@ new_classes = ["CloudflareMCP"]
 # For local dev, add them to .dev.vars (see .dev.vars.example).
 
 [vars]
-# Non-secret runtime config can go here if needed.
+HELM_ENVIRONMENT = "dev"
+HELM_VERSION = "1.0.0"
+HELM_BUILD_ID = "local"
+
+[env.dev]
+name = "helm-cloudflare-mcp-dev"
+vars = { HELM_ENVIRONMENT = "dev", HELM_VERSION = "1.0.0", HELM_BUILD_ID = "dev" }
+
+[env.dev.durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "CloudflareMCP" }]
+
+[env.staging]
+name = "helm-cloudflare-mcp-staging"
+vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "1.0.0", HELM_BUILD_ID = "staging" }
+
+[env.staging.durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "CloudflareMCP" }]
+
+[env.production]
+name = "helm-cloudflare-mcp-production"
+vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "1.0.0", HELM_BUILD_ID = "production" }
+
+[env.production.durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "CloudflareMCP" }]

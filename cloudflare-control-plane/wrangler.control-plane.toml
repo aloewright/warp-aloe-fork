@@ -1,0 +1,40 @@
+name = "helm-control-plane"
+main = "src/workers/control-plane.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ControlPlaneRegistry"]
+
+[vars]
+HELM_ENVIRONMENT = "dev"
+HELM_VERSION = "0.1.0"
+HELM_BUILD_ID = "local"
+# Set HELM_MANIFEST_JSON and CLOUDFLARE_API_TOKEN as secrets before deploy:
+#   wrangler secret put HELM_MANIFEST_JSON -c cloudflare-control-plane/wrangler.control-plane.toml --env dev
+#   wrangler secret put CLOUDFLARE_API_TOKEN -c cloudflare-control-plane/wrangler.control-plane.toml --env dev
+
+[env.dev]
+name = "helm-control-plane-dev"
+vars = { HELM_ENVIRONMENT = "dev", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "dev" }
+
+[env.dev.durable_objects]
+bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+
+[env.staging]
+name = "helm-control-plane-staging"
+vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "staging" }
+
+[env.staging.durable_objects]
+bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+
+[env.production]
+name = "helm-control-plane-production"
+vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "production" }
+
+[env.production.durable_objects]
+bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
