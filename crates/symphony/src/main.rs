@@ -90,6 +90,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audit_path = home_dir().join(".warp/symphony/audit.log");
     let audit = Arc::new(AuditLog::open(audit_path));
 
+    // Spin up the optional `server` extension surfaces (cron triggers +
+    // GitHub/Slack/generic webhook receiver) before the orchestrator
+    // takes over the main task. These run in their own tokio tasks and
+    // never block the orchestrator. PDX-26 D3.
+    let trigger_surfaces = symphony::spawn_triggers(&workflow.config.server, audit.clone()).await;
+    if let Err(e) = &trigger_surfaces {
+        tracing::warn!(error = %e, "trigger surfaces failed to start; continuing without them");
+    }
+    if let Ok(s) = &trigger_surfaces {
+        if let Some(addr) = s.webhook_bind {
+            tracing::info!(%addr, "symphony: webhook receiver bound");
+        }
+        if s.cron_handle.is_some() {
+            tracing::info!("symphony: cron scheduler running");
+        }
+    }
+    // Move the surfaces into a guard so they aren't dropped (which would
+    // abort the JoinHandles). Even when shutdown happens via Ctrl-C, the
+    // tokio runtime tear-down handles cleanup.
+    let _trigger_guard = trigger_surfaces.ok();
+
     let orch = Arc::new(Orchestrator::new(
         workflow,
         Arc::new(tracker) as Arc<dyn IssueSource>,
