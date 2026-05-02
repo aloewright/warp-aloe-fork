@@ -1,0 +1,47 @@
+[package]
+name = "cloud_client"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Native WebSocket client for the Warp cloud control plane (PDX-18)."
+
+# Native-only: this crate uses tokio-tungstenite and is intentionally not
+# part of the wasm32 build set. The transport layer is abstracted behind a
+# trait so the reconnect/resume state machine can be unit-tested without
+# real network IO.
+
+[dependencies]
+agents = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+cloud_protocol = { workspace = true }
+futures-util = { workspace = true }
+orchestrator = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+    "io-util",
+] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+futures-util = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "test-util",
+] }
