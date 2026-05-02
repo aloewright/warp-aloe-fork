@@ -26,10 +26,19 @@ build = "build.rs"
 
 [dependencies]
 thiserror.workspace = true
+# `generable` (PDX-14) lives in this crate as a sibling module to the FFI
+# bridge. It only needs serde for the JSON Schema input and sha2 to hash
+# the generated Swift source for caching by the future FM compile loop —
+# no `tokio`, no `rmcp`, by design (see module docs).
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Tests here are deliberately tiny: a capability probe plus FFI-pointer
-# round-trips that don't require an actual Foundation Models runtime.
+# round-trips that don't require an actual Foundation Models runtime,
+# plus golden-string assertions on the JSON-Schema-to-Swift translator.
+serde_json = { workspace = true }
 
 [build-dependencies]
 cfg_aliases = { workspace = true }
