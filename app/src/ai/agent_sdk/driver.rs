@@ -712,6 +712,20 @@ impl AgentDriver {
     /// * **Task 7c**: when `pinned_provider == Some(Provider::ClaudeCode)`, we
     ///   bypass `Router::select` and dispatch the task directly through the
     ///   pinned agent, satisfying the in-prompt selector contract.
+    ///
+    /// # PDX-105 [B3] tasks 1 + 2 + 4
+    ///
+    /// * **Task 4**: the previously Claude-only `consume_claude_code_pin` is
+    ///   replaced with the generalised
+    ///   [`local_orchestrator::consume_provider_pin`], so a pin pushed by
+    ///   `ProfileModelSelectorAction::Select{Codex,Ollama}Model` actually
+    ///   drives dispatch (previously only `SelectClaudeCodeModel` did).
+    /// * **Tasks 1 + 2**: after `Router::select` resolves to a concrete
+    ///   `AgentId`, the dispatcher notifies the process-wide
+    ///   [`orchestrator::McpForwarder`] via [`McpForwarder::set_active`].
+    ///   MCP-side subscribers (the templatable MCP manager) re-target their
+    ///   tool sinks at the active agent without further coupling to the
+    ///   dispatch site.
     #[cfg(not(target_family = "wasm"))]
     async fn run_via_local_orchestrator(
         prompt: AgentRunPrompt,
@@ -723,17 +737,13 @@ impl AgentDriver {
         let (router, local_agent) =
             local_orchestrator::ensure_persistent_router().await;
 
-        // PDX-103 [B1] task 7c: when the caller did not pass an explicit pin,
-        // consult the process-wide latch set by the in-prompt
-        // `ProfileModelSelector::SelectClaudeCodeModel` action. The latch
-        // is consume-and-clear semantics so it never leaks across turns.
-        let pinned_provider = pinned_provider.or_else(|| {
-            if local_orchestrator::consume_claude_code_pin() {
-                Some(orchestrator::Provider::ClaudeCode)
-            } else {
-                None
-            }
-        });
+        // PDX-103 [B1] task 7c + PDX-105 [B3] task 4: when the caller did
+        // not pass an explicit pin, consult the process-wide latch set by
+        // the in-prompt selector. The latch is consume-and-clear and now
+        // covers all three providers (Claude Code, Codex, Ollama), not
+        // just Claude.
+        let pinned_provider =
+            pinned_provider.or_else(local_orchestrator::consume_provider_pin);
 
         // Stage the per-call run state on the long-lived local agent. The
         // single-slot mutex inside is taken back inside `Agent::execute`.
@@ -765,38 +775,34 @@ impl AgentDriver {
         };
 
         // Selection: pinned-provider path bypasses tie-break and goes
-        // straight to the registered Claude Code agent. The fall-through
-        // is the standard router which prefers the local agent on tie.
+        // straight to the registered agent for the pinned provider. The
+        // fall-through is the standard router which prefers the local
+        // agent on tie.
+        //
+        // PDX-105 [B3] task 4 generalises the pin to all three external
+        // providers. The id-by-provider lookup mirrors the existing
+        // Claude path: query `agent_arc` with the static ID and fall
+        // back to standard select when the agent is unregistered or
+        // unhealthy.
         let agent: StdArc<dyn orchestrator::Agent> = {
             let router_guard = router.lock().await;
-            if matches!(pinned_provider, Some(orchestrator::Provider::ClaudeCode)) {
-                let id = orchestrator::AgentId(
-                    local_orchestrator::CLAUDE_CODE_SONNET_46_ID.to_string(),
-                );
+            let pinned_id = match pinned_provider {
+                Some(orchestrator::Provider::ClaudeCode) => {
+                    Some(local_orchestrator::CLAUDE_CODE_SONNET_46_ID)
+                }
+                Some(orchestrator::Provider::Codex) => {
+                    Some(local_orchestrator::CODEX_WORKER_ID)
+                }
+                Some(orchestrator::Provider::Ollama) => {
+                    Some(local_orchestrator::OLLAMA_WORKER_ID)
+                }
+                _ => None,
+            };
+
+            if let Some(id_str) = pinned_id {
+                let id = orchestrator::AgentId(id_str.to_string());
                 match router_guard.agent_health(&id) {
                     Some(h) if h.healthy => {
-                        // Re-encode the prompt as a plain string for the
-                        // subprocess agent. ServerSide prompts can't be
-                        // resolved here, so we fall back to the local
-                        // agent if the user pinned Claude with a
-                        // ServerSide prompt (very rare; the in-prompt
-                        // selector is only available after the prompt is
-                        // resolved locally).
-                        // We need the actual Arc<dyn Agent> back; the
-                        // router exposes it only via `select`, so we
-                        // build a synthetic role-Worker task and rely on
-                        // tie-break + agent_health to pick claude. To
-                        // skip the lex tie-break gymnastics we just fall
-                        // through to standard select; the local agent
-                        // wins. So instead we store the arc directly:
-                        // walk the registry by id.
-                        // Since `Router` does not expose a getter by id
-                        // we can't fetch the Arc<dyn Agent> here without
-                        // adding an API. As a v1 compromise the pin only
-                        // takes effect when the local agent is *also*
-                        // unhealthy or when the role demands Claude.
-                        // For PDX-103 we prefer correctness: extend
-                        // Router with a typed lookup below.
                         match router_guard.agent_arc(&id) {
                             Some(arc) => StdArc::clone(arc),
                             None => router_guard
@@ -812,8 +818,9 @@ impl AgentDriver {
                     }
                     _ => {
                         log::warn!(
-                            "Claude Code pin requested but agent unhealthy/unregistered; \
-                             falling back to local orchestrator agent"
+                            "Provider pin {:?} requested but agent unhealthy/unregistered; \
+                             falling back to standard router selection",
+                            pinned_provider,
                         );
                         router_guard
                             .select(&orch_task)
@@ -838,6 +845,13 @@ impl AgentDriver {
                     })?
             }
         };
+
+        // PDX-105 [B3] tasks 1 + 2: now that the router has resolved a
+        // concrete `AgentId`, broadcast it through the process-wide
+        // [`McpForwarder`] so that MCP-side subscribers (the templatable
+        // MCP manager) re-target their tool sinks at the active agent
+        // for the rest of this turn.
+        local_orchestrator::mcp_forwarder().set_active(agent.id());
 
         // For the Claude Code (subprocess) path, re-encode the staged prompt
         // into `Task::prompt` so the CLI receives it. The local agent

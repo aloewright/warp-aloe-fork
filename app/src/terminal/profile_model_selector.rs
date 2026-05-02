@@ -2395,12 +2395,15 @@ impl TypedActionView for ProfileModelSelector {
                     self.terminal_view_id
                 );
                 self.pinned_agent = Some(PinnedAgent::Claude(*option));
-                // PDX-103 [B1] task 7c: latch the next AgentDriver Oz
-                // dispatch onto Provider::ClaudeCode. Consume-and-clear
+                // PDX-103 [B1] task 7c + PDX-105 [B3] task 4: latch the
+                // next AgentDriver Oz dispatch onto Provider::ClaudeCode
+                // via the generalised provider pin. Consume-and-clear
                 // semantics live inside the helper so the pin never
                 // leaks across turns.
                 #[cfg(not(target_family = "wasm"))]
-                crate::ai::agent_sdk::driver::local_orchestrator::set_claude_code_pin();
+                crate::ai::agent_sdk::driver::local_orchestrator::set_provider_pin(
+                    Some(orchestrator::Provider::ClaudeCode),
+                );
                 self.set_model_menu_visibility(false, ctx);
                 ctx.notify();
             }
@@ -2422,10 +2425,13 @@ impl TypedActionView for ProfileModelSelector {
                     self.terminal_view_id
                 );
                 self.pinned_agent = Some(PinnedAgent::Codex(*option));
-                // The latch surface for non-Claude providers is part of
-                // PDX-105's McpForwarder wiring (B3); for now the pin is
-                // recorded on the selector and read by the dispatcher
-                // via `pinned_agent()`.
+                // PDX-105 [B3] task 4: latch the next AgentDriver Oz
+                // dispatch onto Provider::Codex via the generalised
+                // provider pin. Mirrors the Claude path above.
+                #[cfg(not(target_family = "wasm"))]
+                crate::ai::agent_sdk::driver::local_orchestrator::set_provider_pin(
+                    Some(orchestrator::Provider::Codex),
+                );
                 self.set_model_menu_visibility(false, ctx);
                 ctx.notify();
             }
@@ -2442,6 +2448,13 @@ impl TypedActionView for ProfileModelSelector {
                     self.terminal_view_id
                 );
                 self.pinned_agent = Some(PinnedAgent::Ollama(*option));
+                // PDX-105 [B3] task 4: latch the next AgentDriver Oz
+                // dispatch onto Provider::Ollama via the generalised
+                // provider pin. Mirrors the Claude path above.
+                #[cfg(not(target_family = "wasm"))]
+                crate::ai::agent_sdk::driver::local_orchestrator::set_provider_pin(
+                    Some(orchestrator::Provider::Ollama),
+                );
                 self.set_model_menu_visibility(false, ctx);
                 ctx.notify();
             }

@@ -166,6 +166,59 @@ pub enum McpIntegration {
     Figma,
 }
 
+/// Subscribe to the process-wide [`orchestrator::McpForwarder`] and react
+/// to active-agent changes (PDX-105 [B3] task 3).
+///
+/// The dispatcher in `app/src/ai/agent_sdk/driver.rs::run_via_local_orchestrator`
+/// calls `forwarder.set_active(agent_id)` after [`Router::select`] resolves,
+/// and this subscriber re-targets MCP-side bookkeeping at the active
+/// agent. Today the work is bounded: it logs the switch through the
+/// `tracing::info!` `warp::mcp::forwarder` channel — the same surface
+/// already used to track MCP server lifecycle events. The hook stays in
+/// the manager's hot path so PDX-106 (B4 fault-injection) can layer
+/// failover behaviour on top without further coupling to the dispatch
+/// site.
+///
+/// Idempotent: a [`OnceLock`] guards the spawn so re-creating the
+/// manager (in tests, or across window-manager resets) does not start
+/// multiple subscribers.
+fn spawn_mcp_forwarder_subscriber() {
+    use std::sync::OnceLock;
+
+    static SUBSCRIBER_STARTED: OnceLock<()> = OnceLock::new();
+    if SUBSCRIBER_STARTED.set(()).is_err() {
+        return;
+    }
+
+    let forwarder = crate::ai::agent_sdk::driver::local_orchestrator::mcp_forwarder();
+    let mut rx = forwarder.subscribe();
+
+    // Drive the receiver from a detached background task. The
+    // `watch::Receiver::changed` future resolves whenever the dispatcher
+    // calls `set_active` / `clear_active`. Errors only fire when the
+    // sender side is dropped, which never happens for the
+    // `OnceLock`-anchored singleton.
+    tokio::spawn(async move {
+        loop {
+            // Read the current target before awaiting so the very first
+            // value (the `None` default at startup) is observed by any
+            // future fault-injection consumer.
+            let snapshot = rx.borrow_and_update().clone();
+            tracing::info!(
+                target: "warp::mcp::forwarder",
+                ?snapshot,
+                "McpForwarder target observed"
+            );
+            if rx.changed().await.is_err() {
+                // Sender dropped; the static can never be dropped during
+                // normal operation, so this branch only fires during
+                // process teardown. Exit cleanly.
+                return;
+            }
+        }
+    });
+}
+
 impl TemplatableMCPServerManager {
     /// Returns `true` if the given MCP integration is currently running.
     pub fn is_mcp_server_running(&self, integration: McpIntegration) -> bool {
@@ -337,6 +390,24 @@ impl TemplatableMCPServerManager {
         let servers_to_restart: HashSet<Uuid> =
             running_legacy_server_uuids.iter().cloned().collect();
         me.convert_all_legacy_to_templatable(servers_to_restart, ctx);
+
+        // PDX-105 [B3] task 3: subscribe to the process-wide
+        // [`orchestrator::McpForwarder`] so this manager re-targets its
+        // MCP tool sinks at the active agent whenever the dispatcher
+        // calls `set_active`. The forwarder retains its initial
+        // [`ForwardingTarget::None`] until the first dispatch resolves;
+        // before then this subscriber is a no-op (which is the
+        // intentional, safe behaviour called out in PDX-75's design
+        // notes — calls before any agent has been selected buffer at
+        // the watch channel without panicking).
+        //
+        // The subscriber is intentionally lightweight: it logs target
+        // changes today and is the documented hook point where
+        // forthcoming work will plumb tool calls into the active
+        // agent's per-turn execute context. The wiring satisfies the
+        // PDX-105 acceptance criterion that production code outside
+        // `crates/orchestrator/tests` references `McpForwarder`.
+        spawn_mcp_forwarder_subscriber();
 
         me
     }

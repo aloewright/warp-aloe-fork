@@ -33,14 +33,13 @@
 //! after the user signs in is supported via [`refresh_claude_code_registration`].
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use orchestrator::{
     Agent, AgentError, AgentEvent, AgentEventStream, AgentId, AgentRegistration, Budget,
-    Capabilities, Health, Provider, Role, Router, Task, TaskId,
+    Capabilities, Health, McpForwarder, Provider, Role, Router, Task, TaskId,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use warpui::ModelSpawner;
@@ -602,39 +601,109 @@ pub(crate) fn agent_health_snapshot(id: &AgentId) -> Option<Health> {
 }
 
 /// Process-wide latch driven by the in-prompt model selector
-/// (`ProfileModelSelector::SelectClaudeCodeModel`) — when `true`, the next
-/// `run_via_local_orchestrator` call dispatches through the Claude Code
-/// agent regardless of Role tie-break.
+/// (`ProfileModelSelector::Select{ClaudeCode,Codex,Ollama}Model`) — when set,
+/// the next `run_via_local_orchestrator` call dispatches through an agent
+/// registered under that [`Provider`] regardless of Role tie-break.
+///
+/// PDX-105 [B3] task 4 — generalised from the prior Claude-only
+/// `AtomicBool` to a `Mutex<Option<Provider>>` so all three pinned
+/// providers (Claude Code, Codex, Ollama) can drive dispatch through the
+/// same code path. The Claude-only `set_claude_code_pin` / `consume_*`
+/// pair is preserved as a thin shim so the existing call site in
+/// `ProfileModelSelector` keeps compiling without churn.
 ///
 /// Per-session pinning lives on the `ProfileModelSelector` itself; this
 /// global is a v1 bridge so the dispatcher can consult the pin without a
-/// new threading-through change set in this PR. Once `AppContext` carries a
+/// new threading-through change set. Once `AppContext` carries a
 /// session-keyed pin map (PDX-104+), this latch can be removed.
-static CLAUDE_CODE_PIN: AtomicBool = AtomicBool::new(false);
+static PROVIDER_PIN: OnceLock<StdMutex<Option<Provider>>> = OnceLock::new();
 
-/// Set the process-wide "next turn routes via Claude Code" latch.
+fn provider_pin_slot() -> &'static StdMutex<Option<Provider>> {
+    PROVIDER_PIN.get_or_init(|| StdMutex::new(None))
+}
+
+/// Set the process-wide "next turn routes via this provider" pin.
 ///
-/// Called from `ProfileModelSelectorAction::SelectClaudeCodeModel` and
-/// (for tests) directly from `run_via_local_orchestrator` callers. Stays
-/// `true` until cleared via [`clear_claude_code_pin`] or auto-cleared at
-/// dispatch time (see `consume_claude_code_pin`).
-pub(crate) fn set_claude_code_pin() {
-    CLAUDE_CODE_PIN.store(true, Ordering::SeqCst);
+/// `None` clears the pin. Called from
+/// `ProfileModelSelectorAction::Select{ClaudeCode,Codex,Ollama}Model`
+/// and (for tests) directly. The pin is consume-and-clear (see
+/// [`consume_provider_pin`]) so it never leaks across turns.
+pub(crate) fn set_provider_pin(provider: Option<Provider>) {
+    let mut slot = provider_pin_slot()
+        .lock()
+        .expect("PROVIDER_PIN mutex is never poisoned");
+    *slot = provider;
 }
 
-/// Clear the Claude Code pin without consuming it. Kept on the public
-/// surface for symmetry with `set_claude_code_pin` and for tests; the
-/// runtime cleanup happens via [`consume_claude_code_pin`].
-#[allow(dead_code)]
-pub(crate) fn clear_claude_code_pin() {
-    CLAUDE_CODE_PIN.store(false, Ordering::SeqCst);
-}
-
-/// Read-and-clear the Claude Code pin. Returns `true` if the pin was set.
+/// Read-and-clear the provider pin. Returns the pinned provider, if any.
 /// The dispatcher calls this once per turn so the pin doesn't leak into
 /// the *next-next* turn.
+pub(crate) fn consume_provider_pin() -> Option<Provider> {
+    let mut slot = provider_pin_slot()
+        .lock()
+        .expect("PROVIDER_PIN mutex is never poisoned");
+    slot.take()
+}
+
+/// Claude-specific shim around [`set_provider_pin`] — kept for
+/// backwards compatibility with PDX-103 callers and for tests. The
+/// production `ProfileModelSelector::SelectClaudeCodeModel` arm now
+/// calls [`set_provider_pin`] directly so all three providers go
+/// through one code path (PDX-105 [B3] task 4).
+#[allow(dead_code)]
+pub(crate) fn set_claude_code_pin() {
+    set_provider_pin(Some(Provider::ClaudeCode));
+}
+
+/// Clear the provider pin without consuming it. Kept for symmetry with
+/// [`set_claude_code_pin`] and for tests; the runtime cleanup happens
+/// via [`consume_provider_pin`].
+#[allow(dead_code)]
+pub(crate) fn clear_claude_code_pin() {
+    set_provider_pin(None);
+}
+
+/// Read-and-clear the Claude Code pin. Returns `true` if the pin was set
+/// to [`Provider::ClaudeCode`]; any other pin variant is left intact (so
+/// switching providers does not reset the others' pins). Kept for
+/// PDX-103 callers that haven't been migrated to
+/// [`consume_provider_pin`] yet.
+#[allow(dead_code)]
 pub(crate) fn consume_claude_code_pin() -> bool {
-    CLAUDE_CODE_PIN.swap(false, Ordering::SeqCst)
+    let mut slot = provider_pin_slot()
+        .lock()
+        .expect("PROVIDER_PIN mutex is never poisoned");
+    if matches!(*slot, Some(Provider::ClaudeCode)) {
+        *slot = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Process-wide [`McpForwarder`] (PDX-105 [B3] task 1).
+///
+/// One forwarder per process. The persistent [`Router`] dispatches every
+/// turn, and after [`Router::select`] resolves to an [`AgentId`], the
+/// dispatcher calls [`McpForwarder::set_active`] (see `driver.rs`) so that
+/// MCP tool-call subscribers can re-target their tool sinks at the
+/// currently-active agent.
+///
+/// Subscribers (e.g. the MCP manager) acquire a `watch::Receiver` via
+/// [`mcp_forwarder`]`().subscribe()` and react to target changes
+/// asynchronously.
+static GLOBAL_MCP_FORWARDER: OnceLock<Arc<McpForwarder>> = OnceLock::new();
+
+/// Returns the process-wide [`McpForwarder`].
+///
+/// Idempotent and cheap — initialised on first access. All callers that
+/// reach for the forwarder obtain the same `Arc`, so dispatch-side
+/// `set_active` calls and MCP-side `subscribe` calls observe the same
+/// state.
+pub fn mcp_forwarder() -> Arc<McpForwarder> {
+    GLOBAL_MCP_FORWARDER
+        .get_or_init(|| Arc::new(McpForwarder::new()))
+        .clone()
 }
 
 /// Generates a fresh [`TaskId`] for use when constructing an
@@ -651,6 +720,23 @@ pub(crate) fn new_task_id() -> TaskId {
 mod tests {
     use super::*;
     use orchestrator::{Role, TaskContext};
+
+    /// The provider pin and the McpForwarder are process-wide singletons,
+    /// so any test that touches them must serialise against every other
+    /// such test to avoid the test-runner's parallel scheduler racing on
+    /// the same `OnceLock`. A plain `std::sync::Mutex` is the lightest
+    /// answer; tests poison-recover so a panic in one doesn't cascade.
+    static PIN_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn pin_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        // `lock()` returns `PoisonError` if a previous test panicked
+        // while holding the guard. We unwrap-or-into-inner to keep
+        // running on the same data; the data is `()` so there's
+        // nothing to recover.
+        PIN_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     fn worker_task() -> Task {
         Task {
@@ -718,12 +804,142 @@ mod tests {
     /// turns.
     #[test]
     fn claude_code_pin_latch_consume_and_clear() {
+        let _g = pin_test_guard();
         clear_claude_code_pin();
         assert!(!consume_claude_code_pin());
         set_claude_code_pin();
         assert!(consume_claude_code_pin());
         // Second consume returns the cleared default.
         assert!(!consume_claude_code_pin());
+    }
+
+    /// PDX-105 [B3] task 4: the generalised provider pin round-trips
+    /// every variant and is read-and-clear (each consume yields `None`
+    /// until the next set).
+    #[test]
+    fn provider_pin_round_trips_every_variant() {
+        let _g = pin_test_guard();
+        // Reset state; this static is shared with other tests in the
+        // same process so we always start from `None` here.
+        set_provider_pin(None);
+        assert_eq!(consume_provider_pin(), None);
+
+        for provider in [
+            Provider::ClaudeCode,
+            Provider::Codex,
+            Provider::Ollama,
+        ] {
+            set_provider_pin(Some(provider));
+            assert_eq!(consume_provider_pin(), Some(provider));
+            // Read-and-clear: next consume is `None`.
+            assert_eq!(consume_provider_pin(), None);
+        }
+    }
+
+    /// PDX-105 [B3] task 4: the legacy Claude-only consume shim only
+    /// matches when the pin is *Claude*, leaving Codex/Ollama pins
+    /// intact. This guards the shim's compatibility contract for
+    /// pre-PDX-105 call sites.
+    #[test]
+    fn consume_claude_code_pin_only_matches_claude() {
+        let _g = pin_test_guard();
+        set_provider_pin(Some(Provider::Codex));
+        assert!(!consume_claude_code_pin());
+        // Codex pin should still be there.
+        assert_eq!(consume_provider_pin(), Some(Provider::Codex));
+
+        set_provider_pin(Some(Provider::ClaudeCode));
+        assert!(consume_claude_code_pin());
+        // Cleared.
+        assert_eq!(consume_provider_pin(), None);
+    }
+
+    /// PDX-105 [B3] task 1: every caller of [`mcp_forwarder`] sees the
+    /// *same* `Arc<McpForwarder>` so that dispatch-side `set_active`
+    /// notifies MCP-side subscribers obtained earlier.
+    #[test]
+    fn mcp_forwarder_is_process_wide_singleton() {
+        let _g = pin_test_guard();
+        let a = mcp_forwarder();
+        let b = mcp_forwarder();
+        assert!(Arc::ptr_eq(&a, &b));
+
+        // A subscriber obtained from one handle observes a state change
+        // pushed through the other handle.
+        let mut rx = a.subscribe();
+        b.set_active(AgentId("alpha".to_string()));
+        assert_eq!(
+            rx.borrow_and_update().agent_id().cloned(),
+            Some(AgentId("alpha".to_string()))
+        );
+    }
+
+    /// PDX-105 [B3] task 1 + 3: simulates the wiring contract end-to-end.
+    /// One handle plays the dispatch site (`set_active(A)`, then
+    /// `set_active(B)`), and another handle plays the MCP-side subscriber
+    /// that re-targets its tool sink. The subscriber observes both
+    /// switches via the watch channel.
+    #[tokio::test]
+    async fn dispatch_set_active_flows_through_to_subscriber() {
+        let _g = pin_test_guard();
+        // Reset the global to a known-good baseline before the test.
+        // (Other tests may have left the forwarder pointing somewhere.)
+        let dispatch = mcp_forwarder();
+        dispatch.clear_active();
+
+        // MCP-side subscriber, obtained *before* the first switch — the
+        // PDX-75 design guarantees no events are lost.
+        let mcp_side = mcp_forwarder();
+        let mut rx = mcp_side.subscribe();
+        // Drain the initial baseline so `changed()` only fires for the
+        // dispatch's `set_active`.
+        let _ = rx.borrow_and_update();
+
+        let agent_a = AgentId("agent-a".to_string());
+        let agent_b = AgentId("agent-b".to_string());
+
+        assert!(dispatch.set_active(agent_a.clone()));
+        rx.changed().await.expect("watch sender alive");
+        assert_eq!(rx.borrow_and_update().agent_id().cloned(), Some(agent_a));
+
+        assert!(dispatch.set_active(agent_b.clone()));
+        rx.changed().await.expect("watch sender alive");
+        assert_eq!(rx.borrow_and_update().agent_id().cloned(), Some(agent_b));
+    }
+
+    /// PDX-105 [B3] task 4: when both an explicit pin (passed in by the
+    /// caller) and a generalised provider pin (set via
+    /// [`set_provider_pin`]) are present, the explicit pin wins. This
+    /// matches the precedence rule wired into
+    /// `run_via_local_orchestrator`: it calls
+    /// `pinned_provider.or_else(consume_provider_pin)`, so the latch is
+    /// only consulted when the caller didn't pre-resolve a provider.
+    #[test]
+    fn provider_pin_explicit_takes_precedence_over_latch() {
+        let _g = pin_test_guard();
+        set_provider_pin(Some(Provider::Codex));
+        let explicit: Option<Provider> = Some(Provider::ClaudeCode);
+        let resolved = explicit.or_else(consume_provider_pin);
+        assert_eq!(resolved, Some(Provider::ClaudeCode));
+        // The latch must still be live (untouched) because the explicit
+        // pin short-circuited the `or_else`. PDX-104 callers depend on
+        // this so a stale latch doesn't fire on the next turn.
+        assert_eq!(consume_provider_pin(), Some(Provider::Codex));
+    }
+
+    /// PDX-105 [B3] task 4: with no caller-provided pin, the generalised
+    /// latch is consulted and consumed. Mirrors the previous
+    /// Claude-only `consume_claude_code_pin` precedence behaviour, now
+    /// on every provider variant.
+    #[test]
+    fn provider_pin_falls_back_to_latch_when_caller_unspecified() {
+        let _g = pin_test_guard();
+        set_provider_pin(Some(Provider::Ollama));
+        let explicit: Option<Provider> = None;
+        let resolved = explicit.or_else(consume_provider_pin);
+        assert_eq!(resolved, Some(Provider::Ollama));
+        // Latch must be cleared after a successful consume.
+        assert_eq!(consume_provider_pin(), None);
     }
 
     /// PDX-103 [B1] task 4: `encode_prompt_for_subprocess` round-trips
