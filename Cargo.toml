@@ -51,6 +51,7 @@ doppler = { path = "crates/doppler" }
 doppler_mcp = { path = "crates/doppler_mcp" }
 field_mask = { path = "crates/field_mask" }
 firebase = { path = "crates/firebase" }
+foundation_models = { path = "crates/foundation_models" }
 fuzzy_match = { path = "crates/fuzzy_match" }
 handlebars = { path = "crates/handlebars" }
 http_client = { path = "crates/http_client" }
