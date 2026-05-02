@@ -1,0 +1,4 @@
+name = "helm-starter-skills"
+description = "Five hand-authored starter skills covering AI Gateway routing, Drizzle migrations, wrangler deploy, Doppler-backed secrets, and warp new scaffolding."
+version = "0.1.0"
+author = "helm-team"
