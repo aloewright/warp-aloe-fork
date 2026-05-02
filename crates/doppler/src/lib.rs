@@ -14,13 +14,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use instant::Instant;
 use tokio::sync::RwLock;
 
+mod picker;
 mod runner;
 mod status;
 
+pub use picker::{bind_project, list_configs, list_projects, DopplerConfig, DopplerProject};
 pub use runner::{CommandRunner, TokioCommandRunner};
 pub use status::{parse_configure_all, read_status, DopplerStatus, ScopedBinding};
 
