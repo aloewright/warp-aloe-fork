@@ -27,8 +27,11 @@ use orchestrator::{
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use auto_healing::{TestDeletionCheck, TestDeletionDecision};
+
 use crate::audit::{AuditEvent, AuditEventKind, AuditLog};
 use crate::diff_guard::{DiffGuard, DiffGuardError};
+use crate::numstat::collect_workspace_diffs;
 use crate::tracker::{Issue, TrackerError};
 use crate::workflow::WorkflowDefinition;
 use crate::workspace::{Workspace, WorkspaceError, WorkspaceManager};
@@ -186,6 +189,12 @@ pub struct Orchestrator {
     state: Arc<RwLock<RuntimeState>>,
     audit: Arc<AuditLog>,
     diff_guard: DiffGuard,
+    /// PDX-28 [D5] auto-healing: test-deletion guardrail. Always wired
+    /// with the default pattern set; the spec acceptance criterion
+    /// explicitly calls out catching `app/src/auth/auth_manager_test.rs`
+    /// deletions, so we keep this on by default rather than making it
+    /// opt-in via the workflow front matter.
+    test_deletion: TestDeletionCheck,
 }
 
 impl Orchestrator {
@@ -206,6 +215,7 @@ impl Orchestrator {
             state: Arc::new(RwLock::new(RuntimeState::default())),
             audit,
             diff_guard: DiffGuard::new(max_diff),
+            test_deletion: TestDeletionCheck::default(),
         }
     }
 
@@ -513,7 +523,7 @@ impl Orchestrator {
         provider: &str,
         outcome: RunOutcome,
     ) {
-        let diff_summary = match self.diff_guard.check(&workspace.path).await {
+        let mut diff_summary = match self.diff_guard.check(&workspace.path).await {
             Ok(stat) => {
                 tracing::info!(
                     insertions = stat.insertions,
@@ -531,6 +541,37 @@ impl Orchestrator {
                 format!("diff guard exceeded: {}", e)
             }
         };
+
+        // PDX-28 [D5]: test-deletion guardrail.
+        match collect_workspace_diffs(&workspace.path).await {
+            Ok(diffs) => {
+                if let TestDeletionDecision::Block {
+                    reason,
+                    offending_path,
+                } = self.test_deletion.evaluate(&diffs)
+                {
+                    tracing::warn!(
+                        issue = %issue.identifier,
+                        path = %offending_path,
+                        "test-deletion guardrail tripped"
+                    );
+                    self.audit.record(
+                        AuditEvent::new(AuditEventKind::TestDeletionBlocked)
+                            .with_issue(issue.id.clone(), issue.identifier.clone())
+                            .with_message(offending_path)
+                            .with_error(reason.clone()),
+                    );
+                    diff_summary.push_str(&format!("\n  test-deletion blocked: {}", reason));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    issue = %issue.identifier,
+                    error = %e,
+                    "test-deletion numstat collect failed; skipping check"
+                );
+            }
+        }
 
         self.workspaces.run_after_run_hook(workspace).await;
 

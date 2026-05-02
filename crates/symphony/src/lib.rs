@@ -14,6 +14,7 @@
 
 pub mod audit;
 pub mod diff_guard;
+pub mod numstat;
 pub mod orchestrator;
 pub mod tracker;
 pub mod workflow;

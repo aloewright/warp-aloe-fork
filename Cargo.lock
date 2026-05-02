@@ -1449,6 +1449,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "auto_healing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12663,6 +12677,7 @@ version = "0.1.0"
 dependencies = [
  "agents",
  "async-trait",
+ "auto_healing",
  "chrono",
  "clap",
  "doppler",

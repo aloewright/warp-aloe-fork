@@ -1,0 +1,34 @@
+[package]
+name = "auto_healing"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PDX-28 [D5] Auto-healing bounds.
+#
+# Helm-side guardrails layered on top of Symphony's retry/backoff/stall
+# detection. This crate is intentionally narrow: three pure-logic checks
+# (diff size, test-file deletion, production-deploy command gate), an
+# aggregate `GuardrailSet` that composes them, and an append-only audit
+# log used to record every guardrail trip.
+#
+# Symphony already owns one diff-size check + one JSONL audit log. The
+# logic in this crate is deliberately decoupled from the Symphony loop
+# so it can also be invoked from the in-process orchestrator dispatch
+# path in `app/src/ai/agent_sdk/driver/local_orchestrator.rs` for
+# non-Symphony agent sessions.
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "sync", "rt"] }
+tracing = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
