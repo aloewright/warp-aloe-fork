@@ -744,15 +744,37 @@ impl ProfileModelSelector {
         self.pinned_claude_code_model
     }
 
-    /// Stub health probe for a Claude Code option.
+    /// Live health probe for a Claude Code option.
     ///
-    /// TODO(PDX-103 B1 task 2 + task 6): once the Router lives on
-    /// `AppContext` and `CliAgentSignInWidget` reports the live auth state,
-    /// this should call `Router::agent_health(&AgentId(...))` and return
-    /// the real `Health::healthy` flag. For now we report "always healthy"
-    /// so the selector compiles and renders against current `master`.
-    fn claude_code_option_healthy(&self, _option: ClaudeCodeOption) -> bool {
-        true
+    /// Reads from the persistent `Router` registered in
+    /// `local_orchestrator::ensure_persistent_router`: if the agent is
+    /// registered and reports `health.healthy == true`, the option renders
+    /// as enabled. Otherwise the selector entry is rendered as
+    /// `MenuItem::Disabled` with an inline "Sign in" affordance — see
+    /// `build_claude_code_menu_items`.
+    ///
+    /// Falls back to `false` (i.e. *unhealthy*) on the WASM target where
+    /// the local orchestrator is not compiled in. This keeps the selector
+    /// honest about the fact that no real Claude routing is possible there.
+    fn claude_code_option_healthy(&self, option: ClaudeCodeOption) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use orchestrator::AgentId;
+            let id = match option {
+                ClaudeCodeOption::Sonnet46 => AgentId(
+                    crate::ai::agent_sdk::driver::local_orchestrator::CLAUDE_CODE_SONNET_46_ID
+                        .to_string(),
+                ),
+            };
+            crate::ai::agent_sdk::driver::local_orchestrator::agent_health_snapshot(&id)
+                .map(|h| h.healthy)
+                .unwrap_or(false)
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = option;
+            false
+        }
     }
 
     pub fn model_menu_item_position_id(&self, llm_id: &LLMId) -> String {
@@ -2020,16 +2042,18 @@ impl TypedActionView for ProfileModelSelector {
                 }
             }
             ProfileModelSelectorAction::SelectClaudeCodeModel(option) => {
-                // TODO(PDX-103 B1 task 2): once the Router is on AppContext,
-                // also write through to the per-session pin used by
-                // `AgentDriver` to dispatch with `Provider::ClaudeCode`
-                // (currently `orchestrator::Provider::ClaudeCode`).
                 log::info!(
                     "Pinning Claude Code option {:?} for terminal {:?}",
                     option,
                     self.terminal_view_id
                 );
                 self.pinned_claude_code_model = Some(*option);
+                // PDX-103 [B1] task 7c: latch the next AgentDriver Oz
+                // dispatch onto Provider::ClaudeCode. Consume-and-clear
+                // semantics live inside the helper so the pin never
+                // leaks across turns.
+                #[cfg(not(target_family = "wasm"))]
+                crate::ai::agent_sdk::driver::local_orchestrator::set_claude_code_pin();
                 self.set_model_menu_visibility(false, ctx);
                 ctx.notify();
             }

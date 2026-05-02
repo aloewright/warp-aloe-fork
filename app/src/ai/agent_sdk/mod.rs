@@ -404,6 +404,9 @@ fn build_merged_config_and_task(
         profile: args.profile.clone(),
         mcp_specs: runtime_mcp_specs,
         harness: harness_kind(args.harness)?,
+        // CLI launches don't go through the in-prompt selector, so they
+        // inherit the standard router tie-break.
+        pinned_orchestrator_provider: None,
     };
 
     Ok((merged_config, task))
@@ -464,6 +467,9 @@ fn build_server_side_task(
         profile,
         mcp_specs: runtime_mcp_specs,
         harness: harness_kind(args.harness)?,
+        // CLI launches don't go through the in-prompt selector, so they
+        // inherit the standard router tie-break.
+        pinned_orchestrator_provider: None,
     };
 
     Ok((config, task))

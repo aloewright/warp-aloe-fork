@@ -2534,11 +2534,44 @@ impl TypedActionView for AISettingsPageView {
                         .stderr(std::process::Stdio::null())
                         .spawn()
                     {
-                        Ok(_) => {
-                            // TODO(PDX-103 task 6): poll Router::health for
-                            // ClaudeCode and refresh the row when it flips
-                            // healthy, mirroring DopplerSignInWidget's
-                            // poll_until_authenticated.
+                        Ok(_child) => {
+                            // PDX-103 [B1] task 6: poll for registration
+                            // success in the background so the persistent
+                            // Router picks up the now-healthy CLI without
+                            // an app restart. Mirrors
+                            // `DopplerSignInWidget::poll_until_authenticated`'s
+                            // bounded retry loop.
+                            //
+                            // Child is intentionally not awaited — the
+                            // claude CLI's OAuth flow opens a browser tab
+                            // and may run for minutes; we don't block the
+                            // settings view on it.
+                            let _ = ctx.spawn(
+                                async move {
+                                    let deadline = std::time::Instant::now()
+                                        + std::time::Duration::from_secs(120);
+                                    while std::time::Instant::now() < deadline {
+                                        warpui::r#async::Timer::after(
+                                            std::time::Duration::from_secs(3),
+                                        )
+                                        .await;
+                                        crate::ai::agent_sdk::driver::local_orchestrator::refresh_claude_code_registration().await;
+                                        let id = orchestrator::AgentId(
+                                            crate::ai::agent_sdk::driver::local_orchestrator::CLAUDE_CODE_SONNET_46_ID
+                                                .to_string(),
+                                        );
+                                        if let Some(h) = crate::ai::agent_sdk::driver::local_orchestrator::agent_health_snapshot(&id) {
+                                            if h.healthy {
+                                                return true;
+                                            }
+                                        }
+                                    }
+                                    false
+                                },
+                                |_me, _success, ctx| {
+                                    ctx.notify();
+                                },
+                            );
                         }
                         Err(err) => log::warn!("failed to spawn `claude /login`: {err}"),
                     }

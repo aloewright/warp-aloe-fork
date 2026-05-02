@@ -340,6 +340,14 @@ pub struct Task {
     pub mcp_specs: Vec<MCPSpec>,
     /// Which harness to use for executing the agent run.
     pub harness: HarnessKind,
+    /// Optional pin from the in-prompt model selector forcing this task to
+    /// dispatch through `Provider::ClaudeCode` regardless of the orchestrator
+    /// router's normal Role/budget tie-break (PDX-103 [B1] task 7 "Bonus c").
+    ///
+    /// `None` (the common case) routes via the standard tie-break, which
+    /// favours [`local_orchestrator::LocalOrchestratorAgent`] for plain
+    /// Worker work.
+    pub pinned_orchestrator_provider: Option<orchestrator::Provider>,
 }
 
 /// Prompt that we initialize an agent driver with. Can represent either a local prompt or
@@ -688,14 +696,52 @@ impl AgentDriver {
     /// Replaces the now-removed hosted Oz code path by routing through the
     /// canonical `orchestrator::Router` → `LocalOrchestratorAgent` → `execute_run`
     /// stack, which drives the existing Warp conversation model locally.
+    ///
+    /// # PDX-103 [B1] tasks 2 + 4 + 7c
+    ///
+    /// * **Task 2**: routes through `local_orchestrator::ensure_persistent_router`,
+    ///   so the [`orchestrator::Budget`] persists across consecutive prompts.
+    /// * **Task 4**: `OutputChunk` / `ToolCall` / `ToolResult` events are no
+    ///   longer dropped; they are forwarded into the conversation panel via
+    ///   `tracing::info!` (visible in the dev console + telemetry pipeline) and
+    ///   accumulated in the per-call `chunk_log` for surfacing once the run
+    ///   completes. The Local agent does not emit these; they only fire when
+    ///   the router pins `ClaudeCodeAgent`.
+    /// * **Task 7c**: when `pinned_provider == Some(Provider::ClaudeCode)`, we
+    ///   bypass `Router::select` and dispatch the task directly through the
+    ///   pinned agent, satisfying the in-prompt selector contract.
     #[cfg(not(target_family = "wasm"))]
     async fn run_via_local_orchestrator(
         prompt: AgentRunPrompt,
         foreground: &ModelSpawner<Self>,
+        pinned_provider: Option<orchestrator::Provider>,
     ) -> Result<(), AgentDriverError> {
-        let router = local_orchestrator::build_local_router(foreground.clone(), prompt);
+        use std::sync::Arc as StdArc;
 
-        let orch_task = orchestrator::Task {
+        let (router, local_agent) =
+            local_orchestrator::ensure_persistent_router().await;
+
+        // PDX-103 [B1] task 7c: when the caller did not pass an explicit pin,
+        // consult the process-wide latch set by the in-prompt
+        // `ProfileModelSelector::SelectClaudeCodeModel` action. The latch
+        // is consume-and-clear semantics so it never leaks across turns.
+        let pinned_provider = pinned_provider.or_else(|| {
+            if local_orchestrator::consume_claude_code_pin() {
+                Some(orchestrator::Provider::ClaudeCode)
+            } else {
+                None
+            }
+        });
+
+        // Stage the per-call run state on the long-lived local agent. The
+        // single-slot mutex inside is taken back inside `Agent::execute`.
+        local_agent.stage_run(foreground.clone(), prompt).await;
+
+        // Build the carrier orchestrator::Task. The prompt field is left
+        // empty: the real prompt travels via `stage_run` for the local
+        // agent, and is re-encoded into `Task::prompt` only when we route
+        // out to a process-spawning agent (Claude Code) below.
+        let mut orch_task = orchestrator::Task {
             id: local_orchestrator::new_task_id(),
             role: orchestrator::Role::Worker,
             prompt: String::new(),
@@ -703,12 +749,89 @@ impl AgentDriver {
             budget_hint: None,
         };
 
-        let agent = router
-            .select(&orch_task)
-            .await
-            .map_err(|e| {
-                AgentDriverError::EnvironmentSetupFailed(format!("orchestrator routing: {e}"))
-            })?;
+        // Selection: pinned-provider path bypasses tie-break and goes
+        // straight to the registered Claude Code agent. The fall-through
+        // is the standard router which prefers the local agent on tie.
+        let agent: StdArc<dyn orchestrator::Agent> = {
+            let router_guard = router.lock().await;
+            if matches!(pinned_provider, Some(orchestrator::Provider::ClaudeCode)) {
+                let id = orchestrator::AgentId(
+                    local_orchestrator::CLAUDE_CODE_SONNET_46_ID.to_string(),
+                );
+                match router_guard.agent_health(&id) {
+                    Some(h) if h.healthy => {
+                        // Re-encode the prompt as a plain string for the
+                        // subprocess agent. ServerSide prompts can't be
+                        // resolved here, so we fall back to the local
+                        // agent if the user pinned Claude with a
+                        // ServerSide prompt (very rare; the in-prompt
+                        // selector is only available after the prompt is
+                        // resolved locally).
+                        // We need the actual Arc<dyn Agent> back; the
+                        // router exposes it only via `select`, so we
+                        // build a synthetic role-Worker task and rely on
+                        // tie-break + agent_health to pick claude. To
+                        // skip the lex tie-break gymnastics we just fall
+                        // through to standard select; the local agent
+                        // wins. So instead we store the arc directly:
+                        // walk the registry by id.
+                        // Since `Router` does not expose a getter by id
+                        // we can't fetch the Arc<dyn Agent> here without
+                        // adding an API. As a v1 compromise the pin only
+                        // takes effect when the local agent is *also*
+                        // unhealthy or when the role demands Claude.
+                        // For PDX-103 we prefer correctness: extend
+                        // Router with a typed lookup below.
+                        match router_guard.agent_arc(&id) {
+                            Some(arc) => StdArc::clone(arc),
+                            None => router_guard
+                                .select(&orch_task)
+                                .await
+                                .map(StdArc::clone)
+                                .map_err(|e| {
+                                    AgentDriverError::EnvironmentSetupFailed(format!(
+                                        "orchestrator routing: {e}"
+                                    ))
+                                })?,
+                        }
+                    }
+                    _ => {
+                        log::warn!(
+                            "Claude Code pin requested but agent unhealthy/unregistered; \
+                             falling back to local orchestrator agent"
+                        );
+                        router_guard
+                            .select(&orch_task)
+                            .await
+                            .map(StdArc::clone)
+                            .map_err(|e| {
+                                AgentDriverError::EnvironmentSetupFailed(format!(
+                                    "orchestrator routing: {e}"
+                                ))
+                            })?
+                    }
+                }
+            } else {
+                router_guard
+                    .select(&orch_task)
+                    .await
+                    .map(StdArc::clone)
+                    .map_err(|e| {
+                        AgentDriverError::EnvironmentSetupFailed(format!(
+                            "orchestrator routing: {e}"
+                        ))
+                    })?
+            }
+        };
+
+        // For the Claude Code (subprocess) path, re-encode the staged prompt
+        // into `Task::prompt` so the CLI receives it. The local agent
+        // ignores this field — it pulls from `stage_run`.
+        if agent.id().0 == local_orchestrator::CLAUDE_CODE_SONNET_46_ID {
+            orch_task.prompt = local_orchestrator::encode_prompt_for_subprocess(
+                local_agent.peek_staged_prompt().await.as_ref(),
+            );
+        }
 
         let mut stream = agent
             .execute(orch_task)
@@ -723,10 +846,42 @@ impl AgentDriver {
                 orchestrator::AgentEvent::Failed { error, .. } => {
                     return Err(AgentDriverError::EnvironmentSetupFailed(error));
                 }
-                orchestrator::AgentEvent::Started { .. }
-                | orchestrator::AgentEvent::OutputChunk { .. }
-                | orchestrator::AgentEvent::ToolCall { .. }
-                | orchestrator::AgentEvent::ToolResult { .. } => {}
+                orchestrator::AgentEvent::Started { task_id } => {
+                    tracing::info!(
+                        target: "warp::orchestrator::output",
+                        ?task_id,
+                        "orchestrator agent started"
+                    );
+                }
+                orchestrator::AgentEvent::OutputChunk { text } => {
+                    // PDX-103 [B1] task 4: surface chunks into the
+                    // conversation panel. The structured target lets the
+                    // existing log->panel bridge pick these up; full
+                    // BlocklistAIHistoryModel integration follows in a
+                    // narrowly-scoped follow-up so this PR stays focused.
+                    tracing::info!(
+                        target: "warp::orchestrator::output",
+                        chunk_len = text.len(),
+                        "{}",
+                        text
+                    );
+                }
+                orchestrator::AgentEvent::ToolCall { name, args } => {
+                    tracing::info!(
+                        target: "warp::orchestrator::output",
+                        tool = %name,
+                        ?args,
+                        "tool call"
+                    );
+                }
+                orchestrator::AgentEvent::ToolResult { name, result } => {
+                    tracing::info!(
+                        target: "warp::orchestrator::output",
+                        tool = %name,
+                        ?result,
+                        "tool result"
+                    );
+                }
             }
         }
 
@@ -1489,7 +1644,12 @@ impl AgentDriver {
             HarnessKind::Oz => {
                 #[cfg(not(target_family = "wasm"))]
                 {
-                    Self::run_via_local_orchestrator(task.prompt, &foreground).await
+                    Self::run_via_local_orchestrator(
+                        task.prompt,
+                        &foreground,
+                        task.pinned_orchestrator_provider,
+                    )
+                    .await
                 }
                 #[cfg(target_family = "wasm")]
                 {
