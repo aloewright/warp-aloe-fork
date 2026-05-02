@@ -14832,6 +14832,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "sum_tree",
+ "symphony",
  "syntax_tree",
  "syntect",
  "sysinfo",

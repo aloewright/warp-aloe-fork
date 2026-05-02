@@ -193,6 +193,7 @@ smol_str.workspace = true
 static_assertions.workspace = true
 string-offset.workspace = true
 sum_tree.workspace = true
+symphony.workspace = true
 tabwriter = "1.4"
 tempfile.workspace = true
 thiserror.workspace = true
