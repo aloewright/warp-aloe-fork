@@ -100,6 +100,8 @@ pub(crate) mod harness;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod local_orchestrator;
 pub(super) mod output;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod provider_caps;
 mod snapshot;
 pub(crate) mod terminal;
 
@@ -737,13 +739,26 @@ impl AgentDriver {
         // single-slot mutex inside is taken back inside `Agent::execute`.
         local_agent.stage_run(foreground.clone(), prompt).await;
 
+        // PDX-104 [B2] task 3: derive Role from the resolved prompt instead
+        // of hardcoding Role::Worker. `infer_role_from_prompt` is a cheap
+        // substring-cue classifier that defaults to Worker for anything
+        // ambiguous, preserving the Worker-on-tie-break behaviour the rest
+        // of the suite expects.
+        let inferred_role = local_orchestrator::infer_role_from_prompt(
+            local_agent
+                .peek_staged_prompt()
+                .await
+                .as_ref()
+                .unwrap_or(&AgentRunPrompt::Local(String::new())),
+        );
+
         // Build the carrier orchestrator::Task. The prompt field is left
         // empty: the real prompt travels via `stage_run` for the local
         // agent, and is re-encoded into `Task::prompt` only when we route
         // out to a process-spawning agent (Claude Code) below.
         let mut orch_task = orchestrator::Task {
             id: local_orchestrator::new_task_id(),
-            role: orchestrator::Role::Worker,
+            role: inferred_role,
             prompt: String::new(),
             context: orchestrator::TaskContext::default(),
             budget_hint: None,

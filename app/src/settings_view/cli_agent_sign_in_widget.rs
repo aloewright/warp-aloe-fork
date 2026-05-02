@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Coding-agent sign-in widget for the AI settings page (PDX-103 [B1] task 6).
+// Coding-agent sign-in widget for the AI settings page.
 //
-// Renders a "Sign in with Claude Code" row directly above the API keys (BYOK)
-// section in `ai_page.rs`. PDX-104 (B2) appends Codex + Ollama rows here.
+// PDX-103 [B1] task 6 introduced this widget with a single Claude Code row.
+// PDX-104 [B2] task 5 appends Codex + Ollama rows here so all three providers
+// the persistent Router knows about have a single sign-in / install surface.
 //
-// Mirrors the Doppler pattern from PDX-49/PDX-50: the button shells out to
-// `claude /login` fire-and-forget; the CLI handles the browser/keychain.
+// Visual order (top → bottom): Claude Code → Codex → Ollama → API keys (BYOK,
+// rendered by the parent ai_page after this widget). The same widget renders
+// above BYOK on three AI subpages.
 //
-// Auth-state probe is stubbed pending PDX-103 task 2 (persistent Router in
-// AppContext). Once that lands, swap `CliAgentAuthState::detect_claude` to
-// read `Router::health(&AgentId::new("claude-sonnet-46"))` from AppContext
-// and gate `ClaudeCodeAgent` registration on the result.
+// Mirrors the Doppler pattern from PDX-49/PDX-50: Claude Code and Codex
+// rows shell out to their respective `claude /login` / `codex login` flows
+// fire-and-forget, the CLI handles browser/keychain. Ollama is local-only —
+// no auth flow, just an *installed / not installed* status with an install
+// link. Each row re-polls registration after the user signs in so the
+// persistent router picks up the now-healthy CLI without an app restart.
 
 use warpui::elements::{
     Align, Container, CrossAxisAlignment, Element, Flex, MouseStateHandle, ParentElement, Text,
@@ -29,13 +33,14 @@ use super::settings_page::{
 };
 use crate::appearance::Appearance;
 
-/// Three-state auth model surfaced inline in the row.
+/// Three-state auth model surfaced inline in a CLI-agent row.
 ///
-/// Detection is intentionally cheap and synchronous; the auth-probe upgrade
-/// (PATH check + `Router::health` lookup) lands in PDX-103 task 6 once the
-/// Router is hoisted into AppContext per task 2.
+/// Used uniformly across the Claude Code and Codex rows. `NotInstalled`
+/// means the CLI binary is not on `PATH`; `SignedOut` means the binary is
+/// installed but the agent's auth surface (e.g. Claude Code's keychain
+/// token, Codex's `~/.codex/auth.json`) reports no active credential.
 #[derive(Debug, PartialEq)]
-#[allow(dead_code)] // `NotInstalled` and `SignedIn` exercised once PDX-103 task 6 lands the real probe.
+#[allow(dead_code)] // Some variants exercised only via the UI render path.
 pub(crate) enum CliAgentAuthState {
     NotInstalled,
     SignedOut,
@@ -43,7 +48,7 @@ pub(crate) enum CliAgentAuthState {
 }
 
 impl CliAgentAuthState {
-    /// Cheap, synchronous auth-state probe (PDX-103 [B1] task 6 wiring).
+    /// Cheap, synchronous auth-state probe for Claude Code (PDX-103 [B1] task 6).
     ///
     /// Two checks compose into one of three states:
     ///
@@ -51,21 +56,12 @@ impl CliAgentAuthState {
     ///    Missing → `NotInstalled`.
     /// 2. `local_orchestrator::agent_health_snapshot` — does the persistent
     ///    Router consider the registered `ClaudeCodeAgent` healthy?
-    ///    Healthy → `SignedIn`. Unhealthy / absent → `SignedOut` (the
-    ///    binary is on PATH but the orchestrator hasn't been able to
-    ///    register it, or the user signed out and the agent flipped its
-    ///    own health on the next failed run).
+    ///    Healthy → `SignedIn`. Unhealthy / absent → `SignedOut`.
     ///
-    /// Both probes are non-blocking: `which::which` walks the `PATH`
-    /// environment variable in-process (no subprocess), and
-    /// `agent_health_snapshot` `try_lock`s the router and returns `None`
-    /// rather than block — see `local_orchestrator.rs`. The whole call is
-    /// safe from any UI render path.
-    ///
-    /// Compiled out on WASM: the persistent router and `which` are both
-    /// gated `cfg(not(target_family = "wasm"))`. The widget falls back to
-    /// `SignedOut` on web so the row renders coherently without a real
-    /// CLI.
+    /// Both probes are non-blocking. Compiled out on WASM: the persistent
+    /// router and `which` are gated `cfg(not(target_family = "wasm"))`. The
+    /// widget falls back to `SignedOut` on web so the row renders coherently
+    /// without a real CLI.
     pub(crate) fn detect_claude() -> Self {
         #[cfg(not(target_family = "wasm"))]
         {
@@ -88,19 +84,53 @@ impl CliAgentAuthState {
         }
     }
 
-    fn banner(&self) -> Option<(&'static str, &'static str)> {
+    /// Cheap, synchronous auth-state probe for Codex (PDX-104 [B2] task 5).
+    ///
+    /// 1. `which::which("codex")` → `NotInstalled` if missing.
+    /// 2. `local_orchestrator::codex_signed_in` reads `~/.codex/auth.json`
+    ///    (mirrored at `harness/codex.rs`'s `CodexAuthDotJson`). The
+    ///    auth-state probe is intentionally not gated on the persistent
+    ///    Router's health snapshot: the `CodexAgent` constructor does
+    ///    *not* probe `auth.json` on its own (it only probes the binary),
+    ///    so the file-based check is the only authoritative signal.
+    pub(crate) fn detect_codex() -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use crate::ai::agent_sdk::driver::local_orchestrator;
+
+            if which::which("codex").is_err() {
+                return Self::NotInstalled;
+            }
+
+            match local_orchestrator::codex_signed_in() {
+                Some(true) => Self::SignedIn,
+                _ => Self::SignedOut,
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Self::SignedOut
+        }
+    }
+
+    /// Banner copy keyed off the agent's display name so all three CLI
+    /// agents can share this scaffolding.
+    fn banner(&self, agent: CliAgent) -> Option<(String, String)> {
         match self {
             Self::NotInstalled => Some((
-                "Claude Code CLI not installed",
-                "Install via `brew install anthropic/claude/claude` or follow https://docs.claude.com/claude-code/setup",
+                format!("{} CLI not installed", agent.display_name()),
+                agent.install_hint().to_string(),
             )),
             Self::SignedOut => Some((
-                "Not signed in to Claude Code",
-                "Click \"Sign in with Claude Code\" — the CLI opens your browser for OAuth.",
+                format!("Not signed in to {}", agent.display_name()),
+                format!(
+                    "Click \"Sign in with {}\" — the CLI opens your browser for OAuth.",
+                    agent.display_name()
+                ),
             )),
             Self::SignedIn => Some((
-                "Signed in to Claude Code",
-                "Available in the in-prompt model selector.",
+                format!("Signed in to {}", agent.display_name()),
+                "Available in the in-prompt model selector.".to_string(),
             )),
         }
     }
@@ -108,12 +138,111 @@ impl CliAgentAuthState {
     fn button_enabled(&self) -> bool {
         !matches!(self, Self::NotInstalled)
     }
+}
+
+/// Identifies a CLI-agent row inside the widget (PDX-104 [B2] task 5).
+///
+/// Used to share the per-row scaffolding (banner copy, install hints,
+/// button labels) without paying for a free-form string at every call
+/// site. Ollama is detect-only and uses [`OllamaState`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliAgent {
+    Claude,
+    Codex,
+}
+
+impl CliAgent {
+    fn display_name(self) -> &'static str {
+        match self {
+            CliAgent::Claude => "Claude Code",
+            CliAgent::Codex => "Codex",
+        }
+    }
+
+    fn install_hint(self) -> &'static str {
+        match self {
+            CliAgent::Claude => "Install via `brew install anthropic/claude/claude` or follow https://docs.claude.com/claude-code/setup",
+            CliAgent::Codex => "Install via `npm i -g @openai/codex` or follow https://platform.openai.com/docs/codex",
+        }
+    }
+
+    fn install_button_label(self) -> &'static str {
+        match self {
+            CliAgent::Claude => "Install Claude Code",
+            CliAgent::Codex => "Install Codex",
+        }
+    }
+
+    fn signin_button_label(self) -> &'static str {
+        match self {
+            CliAgent::Claude => "Sign in with Claude Code",
+            CliAgent::Codex => "Sign in with Codex",
+        }
+    }
+
+    fn resignin_button_label(self) -> &'static str {
+        match self {
+            CliAgent::Claude => "Re-sign in with Claude Code",
+            CliAgent::Codex => "Re-sign in with Codex",
+        }
+    }
+}
+
+fn button_label_for(agent: CliAgent, state: &CliAgentAuthState) -> &'static str {
+    match state {
+        CliAgentAuthState::NotInstalled => agent.install_button_label(),
+        CliAgentAuthState::SignedOut => agent.signin_button_label(),
+        CliAgentAuthState::SignedIn => agent.resignin_button_label(),
+    }
+}
+
+/// Two-state install model for Ollama (PDX-104 [B2] task 5).
+///
+/// Ollama is local-only — no auth flow — so the row only renders an
+/// *installed / not installed* status. The button when installed says
+/// "Reload models" (re-polls the persistent router so newly pulled
+/// models become routable without an app restart); when not installed
+/// it points to the download page instead of a sign-in flow.
+#[derive(Debug, PartialEq)]
+pub(crate) enum OllamaState {
+    NotInstalled,
+    Installed,
+}
+
+impl OllamaState {
+    pub(crate) fn detect() -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use crate::ai::agent_sdk::driver::local_orchestrator;
+            if local_orchestrator::ollama_installed() {
+                Self::Installed
+            } else {
+                Self::NotInstalled
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Self::NotInstalled
+        }
+    }
+
+    fn banner(&self) -> (String, String) {
+        match self {
+            Self::NotInstalled => (
+                "Ollama not installed".to_string(),
+                "Install from https://ollama.com/download — local inference only, no sign-in needed.".to_string(),
+            ),
+            Self::Installed => (
+                "Ollama installed".to_string(),
+                "Available in the in-prompt model selector. Pull additional models with `ollama pull <name>`.".to_string(),
+            ),
+        }
+    }
 
     fn button_label(&self) -> &'static str {
         match self {
-            Self::NotInstalled => "Install Claude Code",
-            Self::SignedOut => "Sign in with Claude Code",
-            Self::SignedIn => "Re-sign in with Claude Code",
+            Self::NotInstalled => "Install Ollama",
+            Self::Installed => "Reload Ollama models",
         }
     }
 }
@@ -121,13 +250,15 @@ impl CliAgentAuthState {
 #[derive(Default)]
 pub(super) struct CliAgentSignInWidget {
     claude_button: MouseStateHandle,
+    codex_button: MouseStateHandle,
+    ollama_button: MouseStateHandle,
 }
 
 impl SettingsWidget for CliAgentSignInWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "claude code codex ollama cli sign in login authenticate third-party coding agent"
+        "claude code codex ollama cli sign in login authenticate third-party coding agent install"
     }
 
     fn render(
@@ -138,7 +269,6 @@ impl SettingsWidget for CliAgentSignInWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
-        let state = CliAgentAuthState::detect_claude();
 
         let header = Container::new(
             Align::new(
@@ -173,12 +303,6 @@ impl SettingsWidget for CliAgentSignInWidget {
         .with_padding_bottom(12.)
         .finish();
 
-        let banner: Option<Box<dyn Element>> = state.banner().map(|(title, sub)| {
-            Container::new(render_settings_info_banner(title, Some(sub), appearance))
-                .with_padding_bottom(12.)
-                .finish()
-        });
-
         let button_style = UiComponentStyles {
             font_size: Some(14.),
             font_weight: Some(Weight::Semibold),
@@ -190,32 +314,107 @@ impl SettingsWidget for CliAgentSignInWidget {
             }),
             ..Default::default()
         };
-        let btn_builder = ui_builder
-            .button(ButtonVariant::Accent, self.claude_button.clone())
-            .with_text_label(state.button_label().to_owned())
-            .with_style(button_style);
 
-        let button: Box<dyn Element> = if state.button_enabled() {
-            btn_builder
+        // ── Claude Code row ────────────────────────────────────────────
+        let claude_state = CliAgentAuthState::detect_claude();
+        let claude_banner: Option<Box<dyn Element>> = claude_state
+            .banner(CliAgent::Claude)
+            .map(|(title, sub)| {
+                Container::new(render_settings_info_banner(
+                    &title,
+                    Some(&sub),
+                    appearance,
+                ))
+                .with_padding_bottom(12.)
+                .finish()
+            });
+        let claude_btn_builder = ui_builder
+            .button(ButtonVariant::Accent, self.claude_button.clone())
+            .with_text_label(button_label_for(CliAgent::Claude, &claude_state).to_owned())
+            .with_style(button_style.clone());
+        let claude_button: Box<dyn Element> = if claude_state.button_enabled() {
+            claude_btn_builder
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AISettingsPageAction::SignInWithClaudeCode);
                 })
                 .finish()
         } else {
-            btn_builder.disabled().build().finish()
+            claude_btn_builder.disabled().build().finish()
         };
 
-        // TODO(PDX-104 task 5): append Codex + Ollama rows below this button
-        // sharing the same header/description/auth-state pattern. Codex follows
-        // the same sign-in flow (`codex login`); Ollama is local-only with an
-        // "Install Ollama" link instead of a sign-in button.
+        // ── Codex row (PDX-104 [B2] task 5) ────────────────────────────
+        let codex_state = CliAgentAuthState::detect_codex();
+        let codex_banner: Option<Box<dyn Element>> = codex_state
+            .banner(CliAgent::Codex)
+            .map(|(title, sub)| {
+                Container::new(render_settings_info_banner(
+                    &title,
+                    Some(&sub),
+                    appearance,
+                ))
+                .with_padding_bottom(12.)
+                .finish()
+            });
+        let codex_btn_builder = ui_builder
+            .button(ButtonVariant::Accent, self.codex_button.clone())
+            .with_text_label(button_label_for(CliAgent::Codex, &codex_state).to_owned())
+            .with_style(button_style.clone());
+        let codex_button: Box<dyn Element> = if codex_state.button_enabled() {
+            codex_btn_builder
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::SignInWithCodex);
+                })
+                .finish()
+        } else {
+            codex_btn_builder.disabled().build().finish()
+        };
 
+        // ── Ollama row (PDX-104 [B2] task 5, detect-only) ─────────────
+        let ollama_state = OllamaState::detect();
+        let (ollama_title, ollama_sub) = ollama_state.banner();
+        let ollama_banner: Box<dyn Element> = Container::new(render_settings_info_banner(
+            &ollama_title,
+            Some(&ollama_sub),
+            appearance,
+        ))
+        .with_padding_bottom(12.)
+        .finish();
+
+        let ollama_btn_builder = ui_builder
+            .button(ButtonVariant::Accent, self.ollama_button.clone())
+            .with_text_label(ollama_state.button_label().to_owned())
+            .with_style(button_style);
+        let ollama_button: Box<dyn Element> = match ollama_state {
+            OllamaState::NotInstalled => ollama_btn_builder
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::OpenOllamaInstall);
+                })
+                .finish(),
+            OllamaState::Installed => ollama_btn_builder
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ReloadOllamaModels);
+                })
+                .finish(),
+        };
+
+        // ── Compose ────────────────────────────────────────────────────
         let mut children: Vec<Box<dyn Element>> = vec![header, description];
-        if let Some(b) = banner {
+        if let Some(b) = claude_banner {
             children.push(b);
         }
-        children.push(button);
+        children.push(claude_button);
+        children.push(spacer());
+        if let Some(b) = codex_banner {
+            children.push(b);
+        }
+        children.push(codex_button);
+        children.push(spacer());
+        children.push(ollama_banner);
+        children.push(ollama_button);
 
         Container::new(
             Flex::column()
@@ -228,6 +427,15 @@ impl SettingsWidget for CliAgentSignInWidget {
     }
 }
 
+/// Vertical separation between CLI-agent rows. Matches the existing
+/// `with_padding_bottom(12.)` spacing the row banners use, kept as a
+/// helper so future rows fall in line without copy/paste drift.
+fn spacer() -> Box<dyn Element> {
+    Container::new(Flex::column().finish())
+        .with_padding_bottom(12.)
+        .finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,8 +444,11 @@ mod tests {
     fn not_installed_disables_button() {
         let s = CliAgentAuthState::NotInstalled;
         assert!(!s.button_enabled());
-        assert_eq!(s.button_label(), "Install Claude Code");
-        let (title, _) = s.banner().expect("banner");
+        assert_eq!(
+            button_label_for(CliAgent::Claude, &s),
+            "Install Claude Code"
+        );
+        let (title, _) = s.banner(CliAgent::Claude).expect("banner");
         assert!(title.to_lowercase().contains("not installed"));
     }
 
@@ -245,13 +456,56 @@ mod tests {
     fn signed_out_enables_button_with_login_label() {
         let s = CliAgentAuthState::SignedOut;
         assert!(s.button_enabled());
-        assert_eq!(s.button_label(), "Sign in with Claude Code");
+        assert_eq!(
+            button_label_for(CliAgent::Claude, &s),
+            "Sign in with Claude Code"
+        );
     }
 
     #[test]
     fn signed_in_offers_resign_path() {
         let s = CliAgentAuthState::SignedIn;
         assert!(s.button_enabled());
-        assert!(s.button_label().contains("Re-sign in"));
+        assert!(button_label_for(CliAgent::Claude, &s).contains("Re-sign in"));
+    }
+
+    /// PDX-104 [B2] task 5: Codex labels mirror the Claude pattern but
+    /// use the Codex CLI's vocabulary.
+    #[test]
+    fn codex_label_set_mirrors_claude_pattern() {
+        assert_eq!(
+            button_label_for(CliAgent::Codex, &CliAgentAuthState::NotInstalled),
+            "Install Codex"
+        );
+        assert_eq!(
+            button_label_for(CliAgent::Codex, &CliAgentAuthState::SignedOut),
+            "Sign in with Codex"
+        );
+        assert_eq!(
+            button_label_for(CliAgent::Codex, &CliAgentAuthState::SignedIn),
+            "Re-sign in with Codex"
+        );
+    }
+
+    /// PDX-104 [B2] task 5: Ollama is detect-only — no `SignedOut` /
+    /// `SignedIn` states. The not-installed banner must point users at
+    /// the install page rather than a sign-in flow.
+    #[test]
+    fn ollama_state_does_not_use_auth_vocab() {
+        let s = OllamaState::NotInstalled;
+        assert_eq!(s.button_label(), "Install Ollama");
+        let (title, sub) = s.banner();
+        assert!(title.to_lowercase().contains("not installed"));
+        assert!(!sub.to_lowercase().contains("sign in"));
+    }
+
+    /// Ollama installed shows "Reload models" — not "Re-sign in" —
+    /// because there's no auth state.
+    #[test]
+    fn ollama_installed_button_says_reload() {
+        let s = OllamaState::Installed;
+        assert_eq!(s.button_label(), "Reload Ollama models");
+        let (title, _) = s.banner();
+        assert!(!title.to_lowercase().contains("not installed"));
     }
 }
