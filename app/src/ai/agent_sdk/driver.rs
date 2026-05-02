@@ -93,6 +93,8 @@ use warpui::{
 };
 
 pub(crate) mod attachments;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod budget_enforcer;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 mod error_classification;
@@ -862,6 +864,52 @@ impl AgentDriver {
             );
         }
 
+        // PDX-27 [D4] runtime enforcement gate: defence-in-depth tier
+        // check + concurrency cap, applied AFTER `Router::select` (or the
+        // pinned-provider bypass) has resolved a concrete agent. The
+        // returned `_enforcement_guard` is held for the lifetime of the
+        // run; on drop it releases the concurrency slot. The pinned-
+        // provider path skips `Router::select`'s tier filter, so this
+        // hook is what prevents a `ClaudeCode`-pinned dispatch from
+        // sneaking past a `Halted` budget.
+        //
+        // `provider_for_agent` returns `None` for any agent id outside
+        // the four built-ins; we treat that as "nothing to enforce" and
+        // proceed (forward-compatible with custom providers registered
+        // outside this module).
+        let task_id_str = orch_task.id.to_string();
+        let agent_id_str = agent.id().0.clone();
+        let task_role = orch_task.role;
+        let _enforcement_guard = if let Some(provider) =
+            budget_enforcer::provider_for_agent(&agent.id())
+        {
+            let enforcer = local_orchestrator::persistent_enforcer();
+            match enforcer
+                .pre_dispatch(
+                    provider,
+                    task_role,
+                    Some(&task_id_str),
+                    Some(&agent_id_str),
+                )
+                .await
+            {
+                Ok(g) => Some((provider, g)),
+                Err(err) => {
+                    tracing::warn!(
+                        provider = ?provider,
+                        role = ?task_role,
+                        error = %err,
+                        "PDX-27 budget enforcer refused dispatch"
+                    );
+                    return Err(AgentDriverError::EnvironmentSetupFailed(format!(
+                        "budget enforcement: {err}"
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+
         let mut stream = agent
             .execute(orch_task)
             .await
@@ -871,7 +919,49 @@ impl AgentDriver {
 
         while let Some(event) = stream.next().await {
             match event {
-                orchestrator::AgentEvent::Completed { .. } => return Ok(()),
+                orchestrator::AgentEvent::Completed { .. } => {
+                    // PDX-27 [D4] task 4: post-completion charge ->
+                    // tier-transition detection. Until the agent stream
+                    // surfaces real token usage (Symphony 13.5), we
+                    // debit the static `estimated_micros_per_task` that
+                    // was used as the router tie-break key. That gives
+                    // us a working tier-transition signal today; the
+                    // follow-up that wires real `turn_completed` token
+                    // counts will replace the constant with the actual
+                    // value without touching this call site.
+                    if let Some((provider, _guard)) = &_enforcement_guard {
+                        let micros =
+                            local_orchestrator::estimated_micros_for_provider(*provider);
+                        let enforcer = local_orchestrator::persistent_enforcer();
+                        match enforcer
+                            .record_charge(
+                                *provider,
+                                micros,
+                                Some(&task_id_str),
+                                Some(&agent_id_str),
+                            )
+                            .await
+                        {
+                            Ok(t) if t.before != t.after => {
+                                tracing::info!(
+                                    provider = ?provider,
+                                    before = ?t.before,
+                                    after = ?t.after,
+                                    "PDX-27 tier transition observed at run completion"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    provider = ?provider,
+                                    error = %e,
+                                    "PDX-27 post-run budget charge failed"
+                                );
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
                 orchestrator::AgentEvent::Failed { error, .. } => {
                     return Err(AgentDriverError::EnvironmentSetupFailed(error));
                 }

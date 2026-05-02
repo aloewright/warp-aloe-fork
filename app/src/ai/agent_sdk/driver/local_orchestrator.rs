@@ -317,12 +317,60 @@ impl Agent for LocalOrchestratorAgent {
 /// `select` calls, never across `execute`.
 static GLOBAL_ROUTER: OnceLock<Arc<AsyncMutex<Router>>> = OnceLock::new();
 
+/// Process-wide [`Budget`] handle, exposed so the PDX-27 budget enforcer
+/// can share the same accounting state as the [`Router`].
+///
+/// Populated in lockstep with [`GLOBAL_ROUTER`]: both `OnceLock`s are
+/// initialised together by [`ensure_persistent_router`], so callers that
+/// reach for the budget after `ensure_persistent_router` has run will
+/// always see the same `Arc<Budget>` the router consults.
+static GLOBAL_BUDGET: OnceLock<Arc<Budget>> = OnceLock::new();
+
+/// Process-wide [`super::budget_enforcer::BudgetEnforcer`] handle —
+/// PDX-27 [D4] runtime gate sitting between [`Router::select`] and
+/// [`orchestrator::Agent::execute`]. Same lifetime story as
+/// [`GLOBAL_BUDGET`]: lazily initialised by
+/// [`ensure_persistent_router`], shared by every dispatch.
+static GLOBAL_ENFORCER: OnceLock<Arc<super::budget_enforcer::BudgetEnforcer>> = OnceLock::new();
+
 /// Construct the budget that backs [`GLOBAL_ROUTER`].
 ///
 /// Cap table is sourced from [`ProviderCapsConfig::load`] (PDX-104 [B2]
 /// task 4) so the same defaults are visible — and tunable — in one place.
 fn build_persistent_budget() -> Arc<Budget> {
     Arc::new(Budget::new(ProviderCapsConfig::load().into_caps()))
+}
+
+/// Return the process-wide [`Budget`] handle.
+///
+/// Returns `None` until [`ensure_persistent_router`] has been called
+/// at least once. Used by the budget enforcer and by status-snapshot
+/// telemetry that wants a real number rather than the lazy
+/// `OnceLock::get` indirection.
+pub(crate) fn persistent_budget() -> Option<Arc<Budget>> {
+    GLOBAL_BUDGET.get().cloned()
+}
+
+/// Return the process-wide [`super::budget_enforcer::BudgetEnforcer`].
+///
+/// Initialised on first access using the persistent [`Budget`] and
+/// production-default audit log path (`~/.warp/symphony/audit.log`).
+/// Concurrency caps default to empty (lenient) per the PDX-27 contract;
+/// future settings overrides plug in via
+/// [`super::provider_caps::ProviderCapsConfig`].
+pub(crate) fn persistent_enforcer() -> Arc<super::budget_enforcer::BudgetEnforcer> {
+    GLOBAL_ENFORCER
+        .get_or_init(|| {
+            let budget = persistent_budget().unwrap_or_else(build_persistent_budget);
+            // Lenient default: no concurrency caps installed. Production
+            // can plumb a real config in via a follow-up commit; tests
+            // override this by constructing `BudgetEnforcer::new` directly.
+            super::budget_enforcer::BudgetEnforcer::with_default_audit(
+                budget,
+                super::budget_enforcer::ConcurrencyCaps::new(),
+            )
+        })
+        .clone()
 }
 
 /// Lazily build (or reuse) the persistent process-wide [`Router`] and return
@@ -349,7 +397,12 @@ pub(crate) async fn ensure_persistent_router() -> (
 
     let router = GLOBAL_ROUTER
         .get_or_init(|| {
-            let budget = build_persistent_budget();
+            // Build the budget once and stash it in `GLOBAL_BUDGET` so
+            // PDX-27's budget enforcer can debit and read the same
+            // accounting state the router consults at select-time.
+            let budget = GLOBAL_BUDGET
+                .get_or_init(build_persistent_budget)
+                .clone();
             let mut router = Router::new(budget);
             router.register(AgentRegistration {
                 agent: local_agent.clone() as Arc<dyn Agent>,
@@ -853,6 +906,24 @@ pub fn mcp_forwarder() -> Arc<McpForwarder> {
     GLOBAL_MCP_FORWARDER
         .get_or_init(|| Arc::new(McpForwarder::new()))
         .clone()
+}
+
+/// Map a [`Provider`] to its registered `estimated_micros_per_task`, the
+/// per-task cost estimate used by the router tie-break sort key.
+///
+/// PDX-27 [D4] task 4 uses this as the placeholder amount to debit
+/// post-run, until real token counts flow through the agent stream from
+/// Symphony 13.5. Provider variants without a registered agent map to
+/// `0`, which makes [`super::budget_enforcer::BudgetEnforcer::record_charge`]
+/// a no-op.
+pub(crate) fn estimated_micros_for_provider(provider: Provider) -> u64 {
+    match provider {
+        Provider::FoundationModels => LOCAL_AGENT_ESTIMATED_MICROS,
+        Provider::ClaudeCode => CLAUDE_CODE_SONNET_46_ESTIMATED_MICROS,
+        Provider::Codex => CODEX_WORKER_ESTIMATED_MICROS,
+        Provider::Ollama => OLLAMA_ESTIMATED_MICROS,
+        Provider::Custom(_) => 0,
+    }
 }
 
 /// Generates a fresh [`TaskId`] for use when constructing an
