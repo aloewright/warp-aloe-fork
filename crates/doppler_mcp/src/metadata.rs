@@ -87,7 +87,10 @@ impl MetadataClient {
 
     /// List all Doppler projects.  Runs `doppler projects list --json`.
     pub async fn list_projects(&self) -> Result<Vec<Project>, DopplerError> {
-        let output = self.runner.run(&["projects", "list", "--json"]).await?;
+        let output = self
+            .runner
+            .run(&["projects", "list", "--json"], None)
+            .await?;
         parse_projects(output)
     }
 
@@ -95,7 +98,7 @@ impl MetadataClient {
     pub async fn list_configs(&self, project: &str) -> Result<Vec<Config>, DopplerError> {
         let output = self
             .runner
-            .run(&["configs", "--project", project, "--json"])
+            .run(&["configs", "--project", project, "--json"], None)
             .await?;
         parse_configs(project, output)
     }
@@ -111,7 +114,10 @@ impl MetadataClient {
     ) -> Result<Vec<String>, DopplerError> {
         let output = self
             .runner
-            .run(&["secrets", "names", "--project", project, "--config", config])
+            .run(
+                &["secrets", "names", "--project", project, "--config", config],
+                None,
+            )
             .await?;
         parse_secret_names(project, output)
     }

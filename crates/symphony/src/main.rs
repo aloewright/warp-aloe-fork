@@ -141,13 +141,13 @@ async fn resolve_api_key(spec: &str) -> Result<SecretValue, Box<dyn std::error::
             value: spec.to_string(),
         });
         let client = DopplerClient::with_runner(DEFAULT_TTL, runner);
-        return Ok(client.get("LINEAR_API_KEY").await?);
+        return Ok(client.get("LINEAR_API_KEY", None).await?);
     }
 
     match doppler::detect() {
         Ok(_) => {
             let client = DopplerClient::new(DEFAULT_TTL);
-            let v = client.get("LINEAR_API_KEY").await?;
+            let v = client.get("LINEAR_API_KEY", None).await?;
             Ok(v)
         }
         Err(DopplerError::NotInstalled { install_hint }) => Err(format!(
@@ -165,7 +165,11 @@ struct LiteralRunner {
 
 #[async_trait::async_trait]
 impl CommandRunner for LiteralRunner {
-    async fn run(&self, _args: &[&str]) -> std::io::Result<Output> {
+    async fn run(
+        &self,
+        _args: &[&str],
+        _cwd: Option<&std::path::Path>,
+    ) -> std::io::Result<Output> {
         use std::os::unix::process::ExitStatusExt;
         Ok(Output {
             status: std::process::ExitStatus::from_raw(0),
