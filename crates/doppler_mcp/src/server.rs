@@ -12,7 +12,7 @@ use rmcp::{
     model::{
         CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
     },
-    schemars, tool, tool_router,
+    schemars, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 
@@ -128,6 +128,9 @@ impl ServerHandler for DopplerMcpServer {
             server_info: Implementation {
                 name: "doppler-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                title: None,
+                icons: None,
+                website_url: None,
             },
             instructions: Some(
                 "Doppler metadata MCP server. \
