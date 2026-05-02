@@ -20,6 +20,34 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+# PDX-25 [D2] — references to the workflows defined in wrangler.workflows.toml.
+# `script_name` binds the workflow from the helm-workflows worker so the
+# control-plane Worker can create instances and dispatch events without
+# duplicating the WorkflowEntrypoint class definitions.
+[[workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow"
+class_name = "SwarmWorkflow"
+script_name = "helm-workflows"
+
+[[workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow"
+class_name = "DeployWorkflow"
+script_name = "helm-workflows"
+
+[[workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow"
+class_name = "ScheduledTaskWorkflow"
+script_name = "helm-workflows"
+
+[[workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow"
+class_name = "WatchdogWorkflow"
+script_name = "helm-workflows"
+
 [vars]
 HELM_ENVIRONMENT = "dev"
 HELM_VERSION = "0.1.0"
@@ -41,6 +69,30 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+[[env.dev.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-dev"
+class_name = "SwarmWorkflow"
+script_name = "helm-workflows-dev"
+
+[[env.dev.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-dev"
+class_name = "DeployWorkflow"
+script_name = "helm-workflows-dev"
+
+[[env.dev.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-dev"
+class_name = "ScheduledTaskWorkflow"
+script_name = "helm-workflows-dev"
+
+[[env.dev.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-dev"
+class_name = "WatchdogWorkflow"
+script_name = "helm-workflows-dev"
+
 [env.staging]
 name = "helm-control-plane-staging"
 vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "staging" }
@@ -54,6 +106,30 @@ database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+[[env.staging.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-staging"
+class_name = "SwarmWorkflow"
+script_name = "helm-workflows-staging"
+
+[[env.staging.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-staging"
+class_name = "DeployWorkflow"
+script_name = "helm-workflows-staging"
+
+[[env.staging.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-staging"
+class_name = "ScheduledTaskWorkflow"
+script_name = "helm-workflows-staging"
+
+[[env.staging.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-staging"
+class_name = "WatchdogWorkflow"
+script_name = "helm-workflows-staging"
+
 [env.production]
 name = "helm-control-plane-production"
 vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "production" }
@@ -66,3 +142,27 @@ binding = "DB"
 database_name = "helm"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
+
+[[env.production.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-production"
+class_name = "SwarmWorkflow"
+script_name = "helm-workflows-production"
+
+[[env.production.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-production"
+class_name = "DeployWorkflow"
+script_name = "helm-workflows-production"
+
+[[env.production.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-production"
+class_name = "ScheduledTaskWorkflow"
+script_name = "helm-workflows-production"
+
+[[env.production.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-production"
+class_name = "WatchdogWorkflow"
+script_name = "helm-workflows-production"

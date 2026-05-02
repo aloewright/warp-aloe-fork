@@ -13,6 +13,7 @@
     "helm": "tsx src/cli/helm.ts",
     "deploy:control-plane": "wrangler deploy -c wrangler.control-plane.toml",
     "deploy:agent-runtime": "wrangler deploy -c wrangler.agent-runtime.toml",
+    "deploy:workflows": "wrangler deploy -c wrangler.workflows.toml",
     "build:container": "bash scripts/build-agent-runtime.sh",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply helm --local -c wrangler.control-plane.toml"
