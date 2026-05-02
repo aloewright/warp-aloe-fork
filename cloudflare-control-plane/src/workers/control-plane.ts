@@ -23,6 +23,10 @@ import { assertEnvironment, manifestForRuntime, type HelmEnvironment } from "../
 import { getDb, users } from "../db/index.js";
 import { eq } from "drizzle-orm";
 
+// Re-export the PDX-20 Durable Object classes so they are available to the
+// Workers runtime. wrangler.control-plane.toml lists each by `class_name`.
+export { SessionDO, UserDO, SwarmDO, RepoDO } from "./durable-objects/index.js";
+
 interface Env extends AuthEnv {
   HELM_ENVIRONMENT: HelmEnvironment;
   HELM_VERSION: string;
@@ -31,6 +35,11 @@ interface Env extends AuthEnv {
   CLOUDFLARE_API_TOKEN?: string;
   CONTROL_PLANE_REGISTRY: DurableObjectNamespace;
   DB: D1Database;
+  // PDX-20 — added in this PR. Workers route via these in PDX-19.
+  SESSION_DO?: DurableObjectNamespace;
+  USER_DO?: DurableObjectNamespace;
+  SWARM_DO?: DurableObjectNamespace;
+  REPO_DO?: DurableObjectNamespace;
 }
 
 export class ControlPlaneRegistry {
