@@ -1,0 +1,113 @@
+name = "helm-workflows"
+main = "src/workers/workflows/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# PDX-25 [D2] Workflows for durability.
+#   - SwarmWorkflow            : multi-agent dispatch + aggregate + handoff
+#   - DeployWorkflow           : build → test → wait-for-approval → deploy
+#   - ScheduledTaskWorkflow    : cron-driven durable task execution
+#   - WatchdogWorkflow         : periodic health-snapshot inspection
+
+[[workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow"
+class_name = "SwarmWorkflow"
+
+[[workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow"
+class_name = "DeployWorkflow"
+
+[[workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow"
+class_name = "ScheduledTaskWorkflow"
+
+[[workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow"
+class_name = "WatchdogWorkflow"
+
+# Cron-driven scheduled handler — fans out into ScheduledTaskWorkflow and
+# WatchdogWorkflow so the durable path runs on every tick. PDX-26 will replace
+# this with a richer trigger router.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+HELM_ENVIRONMENT = "dev"
+HELM_VERSION = "0.1.0"
+HELM_BUILD_ID = "local"
+
+[env.dev]
+name = "helm-workflows-dev"
+vars = { HELM_ENVIRONMENT = "dev", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "dev" }
+
+[[env.dev.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-dev"
+class_name = "SwarmWorkflow"
+
+[[env.dev.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-dev"
+class_name = "DeployWorkflow"
+
+[[env.dev.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-dev"
+class_name = "ScheduledTaskWorkflow"
+
+[[env.dev.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-dev"
+class_name = "WatchdogWorkflow"
+
+[env.staging]
+name = "helm-workflows-staging"
+vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "staging" }
+
+[[env.staging.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-staging"
+class_name = "SwarmWorkflow"
+
+[[env.staging.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-staging"
+class_name = "DeployWorkflow"
+
+[[env.staging.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-staging"
+class_name = "ScheduledTaskWorkflow"
+
+[[env.staging.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-staging"
+class_name = "WatchdogWorkflow"
+
+[env.production]
+name = "helm-workflows-production"
+vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "production" }
+
+[[env.production.workflows]]
+binding = "SWARM_WORKFLOW"
+name = "swarm-workflow-production"
+class_name = "SwarmWorkflow"
+
+[[env.production.workflows]]
+binding = "DEPLOY_WORKFLOW"
+name = "deploy-workflow-production"
+class_name = "DeployWorkflow"
+
+[[env.production.workflows]]
+binding = "SCHEDULED_TASK_WORKFLOW"
+name = "scheduled-task-workflow-production"
+class_name = "ScheduledTaskWorkflow"
+
+[[env.production.workflows]]
+binding = "WATCHDOG_WORKFLOW"
+name = "watchdog-workflow-production"
+class_name = "WatchdogWorkflow"
