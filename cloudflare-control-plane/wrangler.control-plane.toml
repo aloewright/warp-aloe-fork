@@ -4,11 +4,22 @@ compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [durable_objects]
-bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+bindings = [
+  { name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" },
+  { name = "SESSION_DO", class_name = "SessionDO" },
+  { name = "USER_DO", class_name = "UserDO" },
+  { name = "SWARM_DO", class_name = "SwarmDO" },
+  { name = "REPO_DO", class_name = "RepoDO" }
+]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ControlPlaneRegistry"]
+
+# PDX-20 [C4] — add the four control-plane Durable Objects.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SessionDO", "UserDO", "SwarmDO", "RepoDO"]
 
 # D1 binding for the Helm relational schema (PDX-22).
 # Replace `database_id` with the real ID after running:
@@ -70,7 +81,13 @@ name = "helm-control-plane-dev"
 vars = { HELM_ENVIRONMENT = "dev", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "dev" }
 
 [env.dev.durable_objects]
-bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+bindings = [
+  { name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" },
+  { name = "SESSION_DO", class_name = "SessionDO" },
+  { name = "USER_DO", class_name = "UserDO" },
+  { name = "SWARM_DO", class_name = "SwarmDO" },
+  { name = "REPO_DO", class_name = "RepoDO" }
+]
 
 [[env.dev.d1_databases]]
 binding = "DB"
@@ -111,7 +128,13 @@ name = "helm-control-plane-staging"
 vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "staging" }
 
 [env.staging.durable_objects]
-bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+bindings = [
+  { name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" },
+  { name = "SESSION_DO", class_name = "SessionDO" },
+  { name = "USER_DO", class_name = "UserDO" },
+  { name = "SWARM_DO", class_name = "SwarmDO" },
+  { name = "REPO_DO", class_name = "RepoDO" }
+]
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -152,7 +175,13 @@ name = "helm-control-plane-production"
 vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "production" }
 
 [env.production.durable_objects]
-bindings = [{ name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" }]
+bindings = [
+  { name = "CONTROL_PLANE_REGISTRY", class_name = "ControlPlaneRegistry" },
+  { name = "SESSION_DO", class_name = "SessionDO" },
+  { name = "USER_DO", class_name = "UserDO" },
+  { name = "SWARM_DO", class_name = "SwarmDO" },
+  { name = "REPO_DO", class_name = "RepoDO" }
+]
 
 [[env.production.d1_databases]]
 binding = "DB"
