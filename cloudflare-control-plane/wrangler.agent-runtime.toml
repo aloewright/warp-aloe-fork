@@ -1,0 +1,39 @@
+name = "helm-agent-runtime"
+main = "src/workers/agent-runtime.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "RUNTIME_SESSION_COORDINATOR", class_name = "RuntimeSessionCoordinator" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RuntimeSessionCoordinator"]
+
+[vars]
+HELM_ENVIRONMENT = "dev"
+HELM_VERSION = "0.1.0"
+HELM_BUILD_ID = "local"
+# Set HELM_MANIFEST_JSON as a secret before deploy:
+#   wrangler secret put HELM_MANIFEST_JSON -c cloudflare-control-plane/wrangler.agent-runtime.toml --env dev
+
+[env.dev]
+name = "helm-agent-runtime-dev"
+vars = { HELM_ENVIRONMENT = "dev", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "dev" }
+
+[env.dev.durable_objects]
+bindings = [{ name = "RUNTIME_SESSION_COORDINATOR", class_name = "RuntimeSessionCoordinator" }]
+
+[env.staging]
+name = "helm-agent-runtime-staging"
+vars = { HELM_ENVIRONMENT = "staging", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "staging" }
+
+[env.staging.durable_objects]
+bindings = [{ name = "RUNTIME_SESSION_COORDINATOR", class_name = "RuntimeSessionCoordinator" }]
+
+[env.production]
+name = "helm-agent-runtime-production"
+vars = { HELM_ENVIRONMENT = "production", HELM_VERSION = "0.1.0", HELM_BUILD_ID = "production" }
+
+[env.production.durable_objects]
+bindings = [{ name = "RUNTIME_SESSION_COORDINATOR", class_name = "RuntimeSessionCoordinator" }]

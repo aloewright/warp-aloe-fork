@@ -1,0 +1,126 @@
+{
+  "$schema": "./cloudflare-control-plane/schema/helm.cloudflare.schema.json",
+  "accountId": "replace-with-cloudflare-account-id",
+  "zone": {
+    "id": "replace-with-zone-id",
+    "domain": "example.com"
+  },
+  "environments": ["dev", "staging", "production"],
+  "workers": {
+    "helm-control-plane": {
+      "routes": {
+        "dev": "control-dev.example.com/*",
+        "staging": "control-staging.example.com/*",
+        "production": "control.example.com/*"
+      },
+      "metadata": {
+        "helm.owner": "control-plane",
+        "helm.surface": "api"
+      }
+    },
+    "helm-agent-runtime": {
+      "routes": {
+        "dev": "runtime-dev.example.com/*",
+        "staging": "runtime-staging.example.com/*",
+        "production": "runtime.example.com/*"
+      },
+      "metadata": {
+        "helm.owner": "agent-runtime",
+        "helm.surface": "runtime"
+      }
+    },
+    "helm-cloudflare-mcp": {
+      "routes": {
+        "dev": "mcp-dev.example.com/*",
+        "staging": "mcp-staging.example.com/*",
+        "production": "mcp.example.com/*"
+      },
+      "metadata": {
+        "helm.owner": "cloudflare-mcp",
+        "helm.surface": "observability"
+      }
+    }
+  },
+  "resources": {
+    "d1": {
+      "helm-control-plane-dev": {
+        "environment": "dev",
+        "protected": false,
+        "ttlDays": 14
+      },
+      "helm-control-plane-staging": {
+        "environment": "staging",
+        "protected": false,
+        "ttlDays": 30
+      },
+      "helm-control-plane-production": {
+        "environment": "production",
+        "protected": true,
+        "ttlDays": null
+      }
+    },
+    "r2": {
+      "helm-artifacts-dev": {
+        "environment": "dev",
+        "protected": false,
+        "ttlDays": 14
+      },
+      "helm-artifacts-staging": {
+        "environment": "staging",
+        "protected": false,
+        "ttlDays": 30
+      },
+      "helm-artifacts-production": {
+        "environment": "production",
+        "protected": true,
+        "ttlDays": null
+      }
+    },
+    "durableObjects": {
+      "CONTROL_PLANE_REGISTRY": {
+        "environment": "all",
+        "className": "ControlPlaneRegistry",
+        "sqliteBacked": true,
+        "protected": true
+      },
+      "RUNTIME_SESSION_COORDINATOR": {
+        "environment": "all",
+        "className": "RuntimeSessionCoordinator",
+        "sqliteBacked": true,
+        "protected": true
+      }
+    },
+    "kv": {},
+    "aiGateways": {}
+  },
+  "containers": {
+    "dev": {
+      "enabled": false,
+      "instanceClass": "dev"
+    },
+    "staging": {
+      "enabled": false,
+      "instanceClass": "standard"
+    },
+    "production": {
+      "enabled": false,
+      "instanceClass": "standard"
+    }
+  },
+  "access": {
+    "required": true,
+    "teamDomain": "replace-with-team.cloudflareaccess.com",
+    "audiences": {
+      "dev": "replace-with-dev-access-aud",
+      "staging": "replace-with-staging-access-aud",
+      "production": "replace-with-production-access-aud"
+    }
+  },
+  "protected": [
+    {
+      "type": "worker",
+      "name": "helm-cloudflare-mcp-production",
+      "reason": "production observability endpoint"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["accountId", "zone", "environments", "workers", "resources", "containers", "access"],
+  "properties": {
+    "accountId": { "type": "string" },
+    "zone": {
+      "type": "object",
+      "required": ["id", "domain"],
+      "properties": {
+        "id": { "type": "string" },
+        "domain": { "type": "string" }
+      }
+    },
+    "environments": {
+      "type": "array",
+      "items": { "enum": ["dev", "staging", "production"] },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "workers": { "type": "object" },
+    "resources": { "type": "object" },
+    "containers": { "type": "object" },
+    "access": { "type": "object" },
+    "protected": { "type": "array" }
+  }
+}

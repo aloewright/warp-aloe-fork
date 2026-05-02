@@ -5,6 +5,9 @@ import { z } from "zod";
 interface Env {
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  HELM_ENVIRONMENT?: "dev" | "staging" | "production";
+  HELM_VERSION?: string;
+  HELM_BUILD_ID?: string;
   MCP_OBJECT: DurableObjectNamespace;
 }
 
@@ -45,6 +48,53 @@ function ok(data: unknown) {
 function fail(e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
   return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
+}
+
+function removeSqlComments(sql: string): string {
+  return sql
+    .replace(/--.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function hasMultipleSqlStatements(sql: string): boolean {
+  let quote: "'" | "\"" | "`" | null = null;
+
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i];
+    const next = sql[i + 1];
+
+    if (quote) {
+      if (char === quote) {
+        if (next === quote) {
+          i += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+
+    if (char === "'" || char === "\"" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === ";") {
+      return sql.slice(i + 1).trim().length > 0;
+    }
+  }
+
+  return false;
+}
+
+function isReadOnlySql(sql: string): boolean {
+  const normalized = removeSqlComments(sql).trim().toLowerCase();
+  if (!normalized) return false;
+  if (hasMultipleSqlStatements(normalized)) return false;
+  const singleStatement = normalized.endsWith(";")
+    ? normalized.slice(0, -1).trim()
+    : normalized;
+  return /^(select|pragma)\b/.test(singleStatement);
 }
 
 export class CloudflareMCP extends McpAgent<Env> {
@@ -117,7 +167,7 @@ export class CloudflareMCP extends McpAgent<Env> {
 
     this.server.tool(
       "d1_query",
-      "Execute a SQL query against a D1 database. Supports SELECT and DML. Use parameterized queries to avoid injection.",
+      "Execute a single read-only SQL query against a D1 database. Phase C MCP tools do not permit DML or destructive mutation.",
       {
         database_id: z.string().describe("D1 database ID (UUID)"),
         sql: z.string().describe("SQL statement to execute"),
@@ -128,12 +178,46 @@ export class CloudflareMCP extends McpAgent<Env> {
       },
       async ({ database_id, sql, params }) => {
         try {
+          if (!isReadOnlySql(sql)) {
+            throw new Error("Only a single read-only SELECT or PRAGMA statement is allowed.");
+          }
           return ok(
             await cf(`/accounts/${acct()}/d1/database/${database_id}/query`, {
               method: "POST",
               body: JSON.stringify({ sql, params: params ?? [] }),
             }),
           );
+        } catch (e) {
+          return fail(e);
+        }
+      },
+    );
+
+    this.server.tool(
+      "cloudflare_inventory_summary",
+      "Read-only Helm inventory summary for Workers, D1, R2, KV, and AI Gateway resources in the account.",
+      {},
+      async () => {
+        try {
+          const [workers, d1, r2, kv, aiGateways] = await Promise.all([
+            cf(`/accounts/${acct()}/workers/scripts`),
+            cf(`/accounts/${acct()}/d1/database`),
+            cf(`/accounts/${acct()}/r2/buckets`),
+            cf(`/accounts/${acct()}/storage/kv/namespaces`),
+            cf(`/accounts/${acct()}/ai-gateway/gateways`),
+          ]);
+
+          return ok({
+            workers,
+            d1,
+            r2,
+            kv,
+            aiGateways,
+            containers: {
+              supported: false,
+              note: "Containers inventory is reserved for the agent runtime surface until Cloudflare exposes a stable account inventory API here.",
+            },
+          });
         } catch (e) {
           return fail(e);
         }
@@ -321,6 +405,19 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/api/health") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            service: "helm-cloudflare-mcp",
+            environment: env.HELM_ENVIRONMENT ?? "dev",
+            version: env.HELM_VERSION ?? "1.0.0",
+            buildId: env.HELM_BUILD_ID ?? "local",
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
     if (url.pathname === "/mcp") {
       return CloudflareMCP.serveSSE("/mcp").fetch(request, env, ctx);
     }
