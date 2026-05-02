@@ -38,6 +38,13 @@ use std::fmt;
 #[cfg(target_os = "macos")]
 mod ffi;
 
+/// PDX-14: MCP-tool-schema → Swift `@Generable` translator. Compiles on
+/// every target — it's pure Rust + serde_json with no FFI — but only
+/// useful on macOS where the FM bridge can actually consume the
+/// generated Swift. Exposed unconditionally so the orchestrator can
+/// generate Swift on Linux CI for testing without needing a Mac.
+pub mod generable;
+
 /// Errors returned by the Foundation Models bridge.
 #[derive(Debug, thiserror::Error)]
 pub enum FoundationModelsError {
