@@ -130,17 +130,20 @@ async function main(): Promise<void> {
         console.log(JSON.stringify({ dryRun: true, candidates }, null, 2));
         return;
       }
-      for (const candidate of candidates) {
-        assertDeletionAllowed(candidate, {
-          production: flags.production === true,
-          confirm: typeof flags.confirm === "string" ? flags.confirm : undefined
-        });
-        if (candidate.type === "worker") {
-          await result.client.delete(
-            `/accounts/${result.manifest.accountId}/workers/scripts/${candidate.name}`,
-          );
-          console.log(`deleted worker ${candidate.name}`);
-        }
+      const confirmedName = typeof flags.confirm === "string" ? flags.confirm : "";
+      const candidate = candidates.find((item) => item.name === confirmedName);
+      if (!candidate) {
+        throw new Error(`No cleanup candidate named "${confirmedName}" was found.`);
+      }
+      assertDeletionAllowed(candidate, {
+        production: flags.production === true,
+        confirm: confirmedName
+      });
+      if (candidate.type === "worker") {
+        await result.client.delete(
+          `/accounts/${result.manifest.accountId}/workers/scripts/${candidate.name}`,
+        );
+        console.log(`deleted worker ${candidate.name}`);
       }
       return;
     }

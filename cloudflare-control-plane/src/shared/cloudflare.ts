@@ -199,7 +199,9 @@ export function cleanupCandidates(
   env: HelmEnvironment,
   inventory: LiveInventory,
 ): CleanupCandidate[] {
-  const expected = new Set(expectedWorkerNames(manifest, env));
+  const expected = new Set(
+    manifest.environments.flatMap((environment) => expectedWorkerNames(manifest, environment)),
+  );
   const candidates: CleanupCandidate[] = [];
 
   for (const worker of inventory.workers) {

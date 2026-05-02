@@ -31,7 +31,8 @@ const inventory = {
     { id: "2", name: "helm-cloudflare-mcp-dev" },
     { id: "3", name: "helm-extra-dev" },
     { id: "4", name: "helm-extra-production" },
-    { id: "5", name: "helm-keep-dev" }
+    { id: "5", name: "helm-keep-dev" },
+    { id: "6", name: "helm-control-plane-staging" }
   ],
   workerSettings: {
     "helm-control-plane-dev": { tags: ["helm.owner:control-plane"] },
@@ -66,6 +67,13 @@ describe("audit and cleanup", () => {
         confirm: "helm-extra-production"
       }),
     ).not.toThrow();
+  });
+
+  it("does not offer expected workers from other environments for cleanup", () => {
+    const candidates = cleanupCandidates(manifest, "dev", inventory);
+    expect(candidates.map((candidate) => candidate.name)).not.toContain(
+      "helm-control-plane-staging",
+    );
   });
 
   it("does not allow protected resource deletion", () => {
