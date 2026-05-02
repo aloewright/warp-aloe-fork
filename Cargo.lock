@@ -2832,6 +2832,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloud_client"
+version = "0.1.0"
+dependencies = [
+ "agents",
+ "async-stream",
+ "async-trait",
+ "chrono",
+ "cloud_protocol",
+ "futures-util",
+ "orchestrator",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "cloud_protocol"
 version = "0.1.0"
 dependencies = [
@@ -13649,6 +13670,22 @@ dependencies = [
  "futures-core",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls 0.23.39",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tungstenite",
 ]
 
 [[package]]
