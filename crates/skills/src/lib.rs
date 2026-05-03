@@ -58,6 +58,14 @@ pub struct Skill {
     pub roles: Vec<Role>,
     /// Free-form tags used for filter matching.
     pub tags: Vec<String>,
+    /// Tools this skill requires the agent runner to grant before invocation.
+    ///
+    /// Empty means "no tool requirements" — the skill can be invoked in any
+    /// session. Non-empty means the runner MUST refuse to invoke this skill
+    /// unless every name in the list appears in the session's granted-tool
+    /// set. Use [`Skill::tools_satisfied_by`] for the gate.
+    #[serde(default)]
+    pub required_tools: Vec<String>,
     /// Markdown body (everything after the front matter, if any).
     pub body: String,
     /// Runtime statistics and user-supplied overrides for this skill.
@@ -66,6 +74,40 @@ pub struct Skill {
     /// empty until that call is made.
     #[serde(default)]
     pub metadata: SkillMetadata,
+}
+
+impl Skill {
+    /// Trust-model gate: returns true iff every entry in `required_tools` is
+    /// present in `granted` (the tool set the current session has access to).
+    ///
+    /// Skills with an empty `required_tools` always satisfy the gate. The
+    /// agent runner is expected to refuse invocation when this returns false.
+    pub fn tools_satisfied_by<S>(&self, granted: &[S]) -> bool
+    where
+        S: AsRef<str>,
+    {
+        if self.required_tools.is_empty() {
+            return true;
+        }
+        self.required_tools
+            .iter()
+            .all(|req| granted.iter().any(|g| g.as_ref() == req.as_str()))
+    }
+
+    /// Names of required tools that the given session does NOT grant.
+    ///
+    /// Returns an empty vector when the gate passes. The order is the same as
+    /// in `required_tools`.
+    pub fn missing_tools<S>(&self, granted: &[S]) -> Vec<String>
+    where
+        S: AsRef<str>,
+    {
+        self.required_tools
+            .iter()
+            .filter(|req| !granted.iter().any(|g| g.as_ref() == req.as_str()))
+            .cloned()
+            .collect()
+    }
 }
 
 /// Skill metadata read from optional YAML front matter.
@@ -81,6 +123,12 @@ pub struct SkillFrontMatter {
     /// Free-form filter tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Tools this skill requires the agent runner to grant before invocation.
+    ///
+    /// Accepts the YAML key `required_tools` (preferred) or the legacy alias
+    /// `tools`, matching the trust-model spec in PDX-117.
+    #[serde(default, alias = "tools")]
+    pub required_tools: Vec<String>,
 }
 
 /// Loader configuration: paths to walk.
@@ -271,6 +319,7 @@ fn parse_skill(path: &Path, raw: &str) -> Result<Skill, SkillsError> {
     let description = fm.description.unwrap_or_else(|| first_nonblank_line(body));
     let roles = parse_roles(&fm.roles, path);
     let tags = fm.tags;
+    let required_tools = fm.required_tools;
 
     Ok(Skill {
         name,
@@ -278,6 +327,7 @@ fn parse_skill(path: &Path, raw: &str) -> Result<Skill, SkillsError> {
         description,
         roles,
         tags,
+        required_tools,
         body: body.to_string(),
         metadata: SkillMetadata::default(),
     })
