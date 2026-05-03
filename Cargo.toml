@@ -47,6 +47,7 @@ publish = false
 # Local workspace crates. This lets us reference them in other crates without specifying a path.
 agents = { path = "crates/agents" }
 ai = { path = "crates/ai" }
+ai_gateway_config = { path = "crates/ai_gateway_config" }
 auto_healing = { path = "crates/auto_healing" }
 app-installation-detection = { path = "crates/app-installation-detection" }
 asset_cache = { path = "crates/asset_cache" }

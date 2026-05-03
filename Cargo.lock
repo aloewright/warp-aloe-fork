@@ -265,15 +265,20 @@ dependencies = [
 name = "agents"
 version = "0.1.0"
 dependencies = [
+ "ai_gateway_config",
  "async-stream",
  "async-trait",
  "chrono",
+ "dirs 6.0.0",
+ "doppler",
  "foundation_models",
  "futures-core",
  "futures-util",
+ "once_cell",
  "orchestrator",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tokio-test",
@@ -380,6 +385,18 @@ dependencies = [
  "warpui",
  "warpui_extras",
  "watcher",
+]
+
+[[package]]
+name = "ai_gateway_config"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.17",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -14719,6 +14736,7 @@ dependencies = [
  "agents",
  "aho-corasick",
  "ai",
+ "ai_gateway_config",
  "anyhow",
  "app-installation-detection",
  "arrayvec",
