@@ -31,6 +31,7 @@ use auto_healing::{TestDeletionCheck, TestDeletionDecision};
 
 use crate::audit::{AuditEvent, AuditEventKind, AuditLog};
 use crate::diff_guard::{DiffGuard, DiffGuardError};
+use crate::linear_graphql::{LinearGraphQlTool, TOOL_NAME as LINEAR_GRAPHQL_TOOL};
 use crate::numstat::collect_workspace_diffs;
 use crate::tracker::{Issue, TrackerError};
 use crate::workflow::WorkflowDefinition;
@@ -147,6 +148,13 @@ pub struct RunningEntry {
     /// detection to abort. `Arc` so the handle can be cloned for tests
     /// without consuming.
     pub task_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
+    /// PDX-112 §10.5: most recent JSON response observed for an in-flight
+    /// `linear_graphql` tool call. Populated by `consume_stream` whenever
+    /// the agent issues a `linear_graphql` ToolCall and Symphony executes
+    /// it on the agent's behalf. Tests use this to assert the daemon-side
+    /// execution path actually fired without round-tripping the result
+    /// back into the subprocess.
+    pub last_linear_graphql_result: Option<serde_json::Value>,
 }
 
 /// Pending retry of a failed or stalled run.
@@ -195,6 +203,11 @@ pub struct Orchestrator {
     /// deletions, so we keep this on by default rather than making it
     /// opt-in via the workflow front matter.
     test_deletion: TestDeletionCheck,
+    /// PDX-112 §10.5 — daemon-mediated `linear_graphql` tool. Optional so
+    /// integration tests with mock trackers can omit it; production wiring
+    /// always installs the tool wrapping the same `LinearClient` used for
+    /// candidate fetching, comment posting, and state transitions.
+    linear_graphql_tool: Option<LinearGraphQlTool>,
 }
 
 impl Orchestrator {
@@ -216,7 +229,21 @@ impl Orchestrator {
             audit,
             diff_guard: DiffGuard::new(max_diff),
             test_deletion: TestDeletionCheck::default(),
+            linear_graphql_tool: None,
         }
+    }
+
+    /// Install the daemon-mediated `linear_graphql` tool (PDX-112).
+    /// Production wiring threads in a tool wrapping the same `LinearClient`
+    /// used for the rest of tracker IO; tests can omit it.
+    pub fn with_linear_graphql_tool(mut self, tool: LinearGraphQlTool) -> Self {
+        self.linear_graphql_tool = Some(tool);
+        self
+    }
+
+    /// Whether the daemon-mediated `linear_graphql` tool is installed.
+    pub fn has_linear_graphql_tool(&self) -> bool {
+        self.linear_graphql_tool.is_some()
     }
 
     /// Snapshot of current runtime state. Useful for tests.
@@ -351,13 +378,21 @@ impl Orchestrator {
             .render_prompt(&issue, None)
             .map_err(|e| OrchestratorError::Other(e.to_string()))?;
 
+        // §10.5 / PDX-112: the agent runs in an env that NEVER carries
+        // Linear credentials. The `linear_graphql` tool is the only path
+        // to Linear and is mediated entirely by the daemon. Sanitize even
+        // though we start from an empty map so a future caller adding env
+        // forwarding doesn't accidentally regress the invariant.
+        let mut env = HashMap::new();
+        env.retain(|k: &String, _| !is_linear_secret_key(k));
+
         let task = Task {
             id: TaskId::new(),
             role: Role::Worker,
             prompt,
             context: TaskContext {
                 cwd: workspace.path.clone(),
-                env: HashMap::new(),
+                env,
                 metadata: HashMap::new(),
             },
             budget_hint: None,
@@ -386,6 +421,7 @@ impl Orchestrator {
                     last_event_at: now,
                     agent_id: agent_id.clone(),
                     task_handle: None,
+                    last_linear_graphql_result: None,
                 },
             );
         }
@@ -473,13 +509,44 @@ impl Orchestrator {
                             .with_message(truncate(&text, 256)),
                     );
                 }
-                AgentEvent::ToolCall { name, .. } => {
+                AgentEvent::ToolCall { name, args } => {
                     self.audit.record(
                         AuditEvent::new(AuditEventKind::ToolCall)
                             .with_issue(issue.id.clone(), issue.identifier.clone())
                             .with_provider(provider.to_string())
-                            .with_message(name),
+                            .with_message(name.clone()),
                     );
+                    // PDX-112 §10.5: intercept `linear_graphql` calls, run
+                    // them daemon-side, and emit a synthetic tool_result so
+                    // the broader stack (and the audit log) sees the
+                    // structured response. If the tool isn't installed, we
+                    // emit a clear error rather than silently dropping the
+                    // call.
+                    if name == LINEAR_GRAPHQL_TOOL {
+                        let result = match &self.linear_graphql_tool {
+                            Some(tool) => tool.execute(&args).await,
+                            None => serde_json::json!({
+                                "data": serde_json::Value::Null,
+                                "errors": [{
+                                    "message": "linear_graphql tool not configured on daemon",
+                                    "extensions": { "kind": "not_configured" }
+                                }],
+                            }),
+                        };
+                        self.audit.record(
+                            AuditEvent::new(AuditEventKind::ToolResult)
+                                .with_issue(issue.id.clone(), issue.identifier.clone())
+                                .with_provider(provider.to_string())
+                                .with_message(LINEAR_GRAPHQL_TOOL.to_string()),
+                        );
+                        // Stash the result on the running entry's metadata
+                        // so callers (and tests) can introspect the most
+                        // recent linear_graphql payload.
+                        let mut s = self.state.write().await;
+                        if let Some(entry) = s.running.get_mut(&issue.id) {
+                            entry.last_linear_graphql_result = Some(result);
+                        }
+                    }
                 }
                 AgentEvent::ToolResult { name, .. } => {
                     self.audit.record(
@@ -848,6 +915,18 @@ fn truncate(s: &str, n: usize) -> String {
         t.push('…');
         t
     }
+}
+
+/// PDX-112 §10.5 — predicate matching env var names that could leak Linear
+/// credentials into the agent subprocess. Used by `dispatch` to scrub the
+/// task's env map; exposed for direct testing so the env-leak audit test
+/// can assert the policy independently of a live agent run.
+pub fn is_linear_secret_key(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper == "LINEAR_API_KEY"
+        || upper == "LINEAR_API_TOKEN"
+        || upper == "LINEAR_TOKEN"
+        || upper.starts_with("LINEAR_")
 }
 
 /// Compute the retry backoff delay in ms per Symphony §8.4.

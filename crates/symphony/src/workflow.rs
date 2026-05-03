@@ -173,6 +173,11 @@ pub struct AgentConfig {
     /// the issue in its current state. Default 3.
     #[serde(default = "default_max_retry_attempts")]
     pub max_retry_attempts: u32,
+    /// Rate limit (calls/minute/agent run) on the daemon-mediated
+    /// `linear_graphql` tool (Symphony §10.5 / PDX-112). Default 30.
+    /// Set `0` to disable the limiter entirely.
+    #[serde(default = "default_linear_graphql_rate_per_minute")]
+    pub linear_graphql_rate_per_minute: u32,
 }
 
 impl Default for AgentConfig {
@@ -188,8 +193,13 @@ impl Default for AgentConfig {
             stall_timeout_ms: default_stall_timeout_ms(),
             max_retry_backoff_ms: default_max_retry_backoff_ms(),
             max_retry_attempts: default_max_retry_attempts(),
+            linear_graphql_rate_per_minute: default_linear_graphql_rate_per_minute(),
         }
     }
+}
+
+fn default_linear_graphql_rate_per_minute() -> u32 {
+    crate::linear_graphql::DEFAULT_RATE_PER_MINUTE
 }
 
 fn default_comment_on_completion() -> bool {

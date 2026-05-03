@@ -383,6 +383,27 @@ impl LinearClient {
         Ok(())
     }
 
+    /// Execute an arbitrary GraphQL query/variables pair against the
+    /// configured Linear endpoint and return the raw JSON response.
+    ///
+    /// Used by the daemon-mediated `linear_graphql` tool (PDX-112 §10.5)
+    /// to forward agent-issued GraphQL requests without ever exposing the
+    /// API token to the agent subprocess. Reuses the existing transport so
+    /// there is exactly one HTTP path through the tracker.
+    pub async fn post_raw_query(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value, TrackerError> {
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+        self.http
+            .post_graphql(&self.endpoint, self.api_key.expose(), body)
+            .await
+    }
+
     /// Post a comment to a Linear issue. Used by the orchestrator's
     /// post-run handler to write back agent completion / failure summaries
     /// without requiring an agent-side `linear_graphql` tool.
