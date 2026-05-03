@@ -248,7 +248,7 @@ impl Display for SettingsSection {
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
-            SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
+            SettingsSection::OzCloudAPIKeys => write!(f, "Cloud Agent API Keys"),
             SettingsSection::Doppler => write!(f, "Secrets (Doppler)"),
             _ => write!(f, "{self:?}"),
         }
@@ -350,7 +350,12 @@ impl FromStr for SettingsSection {
             "Indexing and projects" | "CodeIndexing" => Ok(Self::CodeIndexing),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
             "CloudEnvironments" => Ok(Self::CloudEnvironments),
-            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Ok(Self::OzCloudAPIKeys),
+            // PDX-120 [E8]: renamed to "Cloud Agent API Keys" in the UI;
+            // accept the legacy "Oz Cloud API Keys" string for backward
+            // compatibility with persisted user settings.
+            "Cloud Agent API Keys" | "Oz Cloud API Keys" | "OzCloudAPIKeys" => {
+                Ok(Self::OzCloudAPIKeys)
+            }
             "Secrets (Doppler)" | "Doppler" => Ok(Self::Doppler),
             _ => Err(()),
         }

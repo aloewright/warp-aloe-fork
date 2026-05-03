@@ -1516,12 +1516,17 @@ impl AISettingsPageView {
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
+                // PDX-120 [E8]: the cloud-agent computer-use widget is the
+                // settings counterpart of the hosted-Oz "Cloud agent" mode.
+                // The Helm fork ships without that hosted surface, so the
+                // widget only renders when the warp_hosted feature is on.
+                #[cfg(feature = "warp_hosted")]
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
             }
             Some(AISubpage::WarpAgent) => {
-                // Oz page: global toggle + Active AI + Input + Other
+                // Cloud agent page: global toggle + Active AI + Input + Other
                 widgets.push(Box::new(GlobalAIWidget::default()));
                 if ai_settings
                     .intelligent_autosuggestions_enabled_internal
@@ -1560,6 +1565,9 @@ impl AISettingsPageView {
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
+                // PDX-120 [E8]: same hosted-Oz gating as the CLI agents
+                // subpage above.
+                #[cfg(feature = "warp_hosted")]
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
@@ -6415,6 +6423,11 @@ impl SettingsWidget for AgentAttributionWidget {
 #[path = "ai_page_tests.rs"]
 mod tests;
 
+// PDX-120 [E8]: only pushed onto the AI page widget stack in the
+// Warp-hosted build. The Helm client routes cloud agents through the
+// helm-cloud Workers (PDX-19/PDX-119) and does not surface this widget,
+// but the type stays around so upstream rebases keep compiling.
+#[cfg_attr(not(feature = "warp_hosted"), allow(dead_code))]
 #[derive(Default)]
 struct CloudAgentComputerUseWidget {
     toggle: SwitchStateHandle,

@@ -58,6 +58,8 @@ pub struct CloudSetupGuideView {
     docs_link_mouse_state: MouseStateHandle,
     env_docs_link_mouse_state: MouseStateHandle,
     integration_docs_link_mouse_state: MouseStateHandle,
+    // PDX-120 [E8]: only used by the Warp-hosted quick-start banner.
+    #[cfg_attr(not(feature = "warp_hosted"), allow(dead_code))]
     visit_oz_button: ViewHandle<ActionButton>,
     parsed_tokens: HashMap<&'static str, ParsedTokensSnapshot>,
     vertical_scroll_state: ClippedScrollStateHandle,
@@ -150,7 +152,7 @@ impl CloudSetupGuideView {
         let mut header_container = Flex::column().with_spacing(8.);
 
         let title = Text::new(
-            "Getting started with Oz cloud agents",
+            "Getting started with cloud agents",
             appearance.ui_font_family(),
             title_font_size,
         )
@@ -160,7 +162,7 @@ impl CloudSetupGuideView {
         header_container.add_child(title);
 
         let subtitle = Text::new(
-            "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            "Start cloud agents from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the agent SDK or CLI.",
             appearance.ui_font_family(),
             subtitle_font_size,
         )
@@ -183,7 +185,7 @@ impl CloudSetupGuideView {
                 appearance
                     .ui_builder()
                     .link(
-                        "Oz documentation".to_string(),
+                        "Cloud agent documentation".to_string(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -214,6 +216,7 @@ impl CloudSetupGuideView {
     }
 
     /// Render the quick start banner with link to oz.warp.dev.
+    #[cfg_attr(not(feature = "warp_hosted"), allow(dead_code))]
     fn render_quick_start_banner(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = 16.;
@@ -253,7 +256,7 @@ impl CloudSetupGuideView {
         let font_size = 16.;
 
         Text::new(
-            "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            "Manual setup: Create a Slack or Linear integration with the agent CLI",
             appearance.ui_font_family(),
             font_size,
         )
@@ -592,7 +595,13 @@ impl View for CloudSetupGuideView {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         content.add_child(self.render_header(appearance));
-        content.add_child(self.render_quick_start_banner(appearance));
+        // PDX-120 [E8]: the quick-start banner advertises oz.warp.dev which
+        // only exists in the Warp-hosted fork. Hide it entirely for the
+        // Helm client; upstream rebases keep the banner under warp_hosted.
+        #[cfg(feature = "warp_hosted")]
+        {
+            content.add_child(self.render_quick_start_banner(appearance));
+        }
         content.add_child(self.render_manual_setup_header(appearance));
         content.add_child(steps);
 

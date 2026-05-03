@@ -72,6 +72,8 @@ pub enum AgentTypeSelectorEvent {
 
 pub struct AgentTypeSelector {
     close_button_mouse_state: MouseStateHandle,
+    // PDX-120 [E8]: only used by the Warp-hosted "Cloud agent" row.
+    #[cfg_attr(not(feature = "warp_hosted"), allow(dead_code))]
     cloud_agent_mouse_state: MouseStateHandle,
     local_agent_mouse_state: MouseStateHandle,
     dialog_mouse_state: MouseStateHandle,
@@ -112,12 +114,15 @@ pub fn init(app: &mut AppContext) {
 
 impl AgentTypeSelector {
     pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+        // PDX-120 [E8]: index 0 is the cloud-agent row in the Warp-hosted
+        // build and the local-agent row in the Helm client (where the
+        // cloud option is hidden). Either way we start with the first
+        // visible option selected.
         Self {
             close_button_mouse_state: MouseStateHandle::default(),
             cloud_agent_mouse_state: MouseStateHandle::default(),
             local_agent_mouse_state: MouseStateHandle::default(),
             dialog_mouse_state: MouseStateHandle::default(),
-            // Cloud agent is selected by default (index 0).
             selected_option_index: 0,
         }
     }
@@ -330,6 +335,11 @@ impl AgentTypeSelector {
             .with_padding_right(HEADER_PADDING_HORIZONTAL)
             .finish();
 
+        // PDX-120 [E8]: the hosted-Oz "Cloud agent" entry only renders in
+        // the Warp-hosted fork. The Helm client routes cloud creation
+        // through the helm-cloud Workers (PDX-19/PDX-119), so this modal
+        // only offers the local agent path here.
+        #[cfg(feature = "warp_hosted")]
         let cloud_agent_option = self.render_option(
             0,
             Icon::OzCloud,
@@ -341,8 +351,13 @@ impl AgentTypeSelector {
             appearance,
         );
 
+        // Local-agent index follows whatever rows precede it.
+        #[cfg(feature = "warp_hosted")]
+        let local_agent_index = 1;
+        #[cfg(not(feature = "warp_hosted"))]
+        let local_agent_index = 0;
         let local_agent_option = self.render_option(
-            1,
+            local_agent_index,
             Icon::Oz,
             "Local agent",
             "Runs on your machine and requires supervision. Best for quick, interactive tasks.",
@@ -352,12 +367,14 @@ impl AgentTypeSelector {
             appearance,
         );
 
-        let options = Flex::column()
+        let mut options_flex = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_spacing(OPTIONS_VERTICAL_GAP)
-            .with_child(cloud_agent_option)
-            .with_child(local_agent_option)
-            .finish();
+            .with_spacing(OPTIONS_VERTICAL_GAP);
+        #[cfg(feature = "warp_hosted")]
+        {
+            options_flex = options_flex.with_child(cloud_agent_option);
+        }
+        let options = options_flex.with_child(local_agent_option).finish();
 
         let body = Container::new(options)
             .with_padding_top(BODY_PADDING_VERTICAL)
@@ -438,15 +455,21 @@ impl TypedActionView for AgentTypeSelector {
                 ctx.notify();
             }
             AgentTypeSelectorAction::ArrowUp | AgentTypeSelectorAction::ArrowDown => {
-                // Toggle between the two options.
-                self.selected_option_index = if self.selected_option_index == 0 {
-                    1
-                } else {
-                    0
-                };
+                // PDX-120 [E8]: in the Helm client only the local-agent
+                // row is visible, so arrow nav is a no-op. In the
+                // Warp-hosted build it toggles between the two rows.
+                #[cfg(feature = "warp_hosted")]
+                {
+                    self.selected_option_index = if self.selected_option_index == 0 {
+                        1
+                    } else {
+                        0
+                    };
+                }
                 ctx.notify();
             }
             AgentTypeSelectorAction::Enter => {
+                #[cfg(feature = "warp_hosted")]
                 match self.selected_option_index {
                     0 => {
                         ctx.emit(AgentTypeSelectorEvent::Selected(AgentType::Cloud));
@@ -455,6 +478,11 @@ impl TypedActionView for AgentTypeSelector {
                         ctx.emit(AgentTypeSelectorEvent::Selected(AgentType::Local));
                     }
                     _ => {}
+                }
+                #[cfg(not(feature = "warp_hosted"))]
+                {
+                    // Only the local agent is selectable in the Helm client.
+                    ctx.emit(AgentTypeSelectorEvent::Selected(AgentType::Local));
                 }
                 ctx.notify();
             }
