@@ -16,6 +16,7 @@ pub mod diff_guard;
 pub mod linear_graphql;
 pub mod numstat;
 pub mod orchestrator;
+pub mod reload;
 pub mod tracker;
 pub mod triggers;
 pub mod workflow;
@@ -25,6 +26,7 @@ pub use audit::{AuditEvent, AuditLog};
 pub use diff_guard::{DiffGuard, DiffGuardError, DiffStat};
 pub use linear_graphql::{LinearGraphQlExecutor, LinearGraphQlTool, DEFAULT_RATE_PER_MINUTE, TOOL_NAME};
 pub use orchestrator::{Orchestrator, OrchestratorError};
+pub use reload::{apply_reload, WatchError, WorkflowHandle, WorkflowWatcher};
 pub use tracker::{BlockerRef, Issue, LinearClient, TrackerError};
 pub use triggers::{spawn_triggers, TriggerError, TriggerSurfaces};
 pub use workflow::{

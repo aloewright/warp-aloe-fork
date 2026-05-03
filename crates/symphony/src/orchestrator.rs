@@ -33,6 +33,7 @@ use crate::audit::{AuditEvent, AuditEventKind, AuditLog};
 use crate::diff_guard::{DiffGuard, DiffGuardError};
 use crate::linear_graphql::{LinearGraphQlTool, TOOL_NAME as LINEAR_GRAPHQL_TOOL};
 use crate::numstat::collect_workspace_diffs;
+use crate::reload::WorkflowHandle;
 use crate::tracker::{Issue, TrackerError};
 use crate::workflow::WorkflowDefinition;
 use crate::workspace::{Workspace, WorkspaceError, WorkspaceManager};
@@ -190,7 +191,11 @@ pub struct RuntimeState {
 
 /// Orchestrator core.
 pub struct Orchestrator {
-    workflow: WorkflowDefinition,
+    /// Live, swap-able workflow definition. Reads go through
+    /// [`WorkflowHandle::load`] to obtain a per-call snapshot
+    /// (`Arc<WorkflowDefinition>`); writes are performed by the live-reload
+    /// watcher (see [`crate::reload`]). PDX-111.
+    workflow: Arc<WorkflowHandle>,
     tracker: Arc<dyn IssueSource>,
     workspaces: Arc<WorkspaceManager>,
     router: Arc<Router>,
@@ -212,6 +217,11 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Construct a new orchestrator wiring all collaborators.
+    ///
+    /// Accepts an owned [`WorkflowDefinition`] for ergonomics; it is wrapped
+    /// in a fresh [`WorkflowHandle`]. Callers that already hold a handle
+    /// (e.g. `main.rs`, which shares the handle with the live-reload
+    /// watcher) should use [`Orchestrator::with_handle`] instead.
     pub fn new(
         workflow: WorkflowDefinition,
         tracker: Arc<dyn IssueSource>,
@@ -219,7 +229,27 @@ impl Orchestrator {
         router: Arc<Router>,
         audit: Arc<AuditLog>,
     ) -> Self {
-        let max_diff = workflow.config.agent.max_diff_lines;
+        Self::with_handle(
+            Arc::new(WorkflowHandle::new(workflow)),
+            tracker,
+            workspaces,
+            router,
+            audit,
+        )
+    }
+
+    /// Construct a new orchestrator with an externally-owned
+    /// [`WorkflowHandle`]. Use this in production so the live-reload watcher
+    /// and the orchestrator share the same handle and the next tick after a
+    /// successful reload picks up the new config without restart (PDX-111).
+    pub fn with_handle(
+        workflow: Arc<WorkflowHandle>,
+        tracker: Arc<dyn IssueSource>,
+        workspaces: Arc<WorkspaceManager>,
+        router: Arc<Router>,
+        audit: Arc<AuditLog>,
+    ) -> Self {
+        let max_diff = workflow.load().config.agent.max_diff_lines;
         Self {
             workflow,
             tracker,
@@ -246,6 +276,14 @@ impl Orchestrator {
         self.linear_graphql_tool.is_some()
     }
 
+    /// Snapshot the live workflow definition. Cheap (`Arc::clone` under a
+    /// brief read lock); call once per logical operation that needs the
+    /// config and reuse the snapshot — both for consistency *within* an
+    /// operation and to take only one lock round-trip.
+    pub fn workflow_snapshot(&self) -> Arc<WorkflowDefinition> {
+        self.workflow.load()
+    }
+
     /// Snapshot of current runtime state. Useful for tests.
     pub async fn state_snapshot(&self) -> (HashMap<String, RunningEntry>, HashSet<String>) {
         let s = self.state.read().await;
@@ -253,9 +291,14 @@ impl Orchestrator {
     }
 
     /// Main loop: tick on `polling.interval_ms` until `shutdown` resolves.
+    ///
+    /// The interval is re-read from the live workflow handle at the top of
+    /// every loop iteration, so a `polling.interval_ms` edit (PDX-111 live
+    /// reload) takes effect on the *next* tick without restart.
     pub async fn run(self: Arc<Self>, mut shutdown: tokio::sync::oneshot::Receiver<()>) {
-        let interval = Duration::from_millis(self.workflow.config.polling.interval_ms);
         loop {
+            let interval =
+                Duration::from_millis(self.workflow.load().config.polling.interval_ms);
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {
                     if let Err(e) = self.tick().await {
@@ -285,8 +328,11 @@ impl Orchestrator {
         // §8.4: process retry queue (issues whose backoff has elapsed).
         self.process_retry_queue().await;
 
-        let active = &self.workflow.config.tracker.active_states;
-        let candidates = self.tracker.fetch_candidate_issues(active).await?;
+        // PDX-111: snapshot the live workflow once per tick. Live edits
+        // arrive between ticks; reads within a single tick are consistent.
+        let wf = self.workflow.load();
+        let active = wf.config.tracker.active_states.clone();
+        let candidates = self.tracker.fetch_candidate_issues(&active).await?;
 
         // Snapshot state to filter without holding the lock during the
         // filter pass — we only re-acquire it to mutate `claimed`/`running`.
@@ -299,7 +345,7 @@ impl Orchestrator {
             )
         };
 
-        let max = self.workflow.config.agent.max_concurrent_agents;
+        let max = wf.config.agent.max_concurrent_agents;
         if running.len() >= max {
             tracing::debug!(
                 running = running.len(),
@@ -309,8 +355,7 @@ impl Orchestrator {
             return Ok(());
         }
 
-        let label = &self.workflow.config.agent.agent_label_required;
-        let label_lc = label.to_lowercase();
+        let label_lc = wf.config.agent.agent_label_required.to_lowercase();
         let active_set: HashSet<&str> = active.iter().map(|s| s.as_str()).collect();
         let mut eligible: Vec<Issue> = candidates
             .into_iter()
@@ -373,8 +418,12 @@ impl Orchestrator {
             }
         };
 
-        let prompt = self
-            .workflow
+        // PDX-111: snapshot the workflow at dispatch time so this run keeps
+        // operating against the config that was live when it started, even
+        // if the live-reload watcher swaps in a new definition while the
+        // agent is mid-flight.
+        let wf_snapshot = self.workflow.load();
+        let prompt = wf_snapshot
             .render_prompt(&issue, None)
             .map_err(|e| OrchestratorError::Other(e.to_string()))?;
 
@@ -645,7 +694,8 @@ impl Orchestrator {
         // Optional Linear write-back: post a comment summarizing the run.
         // Skipped if `agent.comment_on_completion = false` in WORKFLOW.md
         // OR if the issue source is a mock that doesn't implement add_comment.
-        if self.workflow.config.agent.comment_on_completion {
+        let wf = self.workflow.load();
+        if wf.config.agent.comment_on_completion {
             let body = self.compose_completion_comment(provider, &diff_summary, &outcome);
             if let Err(e) = self.tracker.add_comment(&issue.id, &body).await {
                 tracing::warn!(
@@ -661,9 +711,9 @@ impl Orchestrator {
         // handoff_state_on_success (e.g. "In Review"); failures go to
         // handoff_state_on_failure (e.g. "Backlog") if configured.
         let target = if outcome.success {
-            self.workflow.config.agent.handoff_state_on_success.as_deref()
+            wf.config.agent.handoff_state_on_success.as_deref()
         } else {
-            self.workflow.config.agent.handoff_state_on_failure.as_deref()
+            wf.config.agent.handoff_state_on_failure.as_deref()
         };
         if let Some(target_state) = target {
             if let Err(e) = self.tracker.transition_issue(&issue.id, target_state).await {
@@ -734,7 +784,7 @@ impl Orchestrator {
     /// `now - last_event_at > stall_timeout_ms`. Aborted runs are queued
     /// for retry with backoff. `stall_timeout_ms <= 0` disables.
     async fn reconcile_stalled(&self) {
-        let stall_ms = self.workflow.config.agent.stall_timeout_ms;
+        let stall_ms = self.workflow.load().config.agent.stall_timeout_ms;
         if stall_ms == 0 {
             return;
         }
@@ -801,8 +851,9 @@ impl Orchestrator {
 
         for retry in due {
             // Re-fetch the issue to validate it's still active & eligible.
-            let active = &self.workflow.config.tracker.active_states;
-            let candidates = match self.tracker.fetch_candidate_issues(active).await {
+            let wf = self.workflow.load();
+            let active = wf.config.tracker.active_states.clone();
+            let candidates = match self.tracker.fetch_candidate_issues(&active).await {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(error = %e, "retry candidate fetch failed; deferring");
@@ -817,12 +868,7 @@ impl Orchestrator {
                     continue;
                 }
             };
-            let label_lc = self
-                .workflow
-                .config
-                .agent
-                .agent_label_required
-                .to_lowercase();
+            let label_lc = wf.config.agent.agent_label_required.to_lowercase();
             let issue = candidates.into_iter().find(|i| {
                 i.id == retry.issue_id && i.labels.iter().any(|l| l == &label_lc)
             });
@@ -864,7 +910,8 @@ impl Orchestrator {
         attempt: u32,
         error: Option<String>,
     ) {
-        let max_attempts = self.workflow.config.agent.max_retry_attempts;
+        let wf = self.workflow.load();
+        let max_attempts = wf.config.agent.max_retry_attempts;
         if attempt > max_attempts {
             tracing::warn!(
                 issue = %identifier,
@@ -879,7 +926,7 @@ impl Orchestrator {
             );
             return;
         }
-        let max_backoff = self.workflow.config.agent.max_retry_backoff_ms;
+        let max_backoff = wf.config.agent.max_retry_backoff_ms;
         let delay_ms = retry_backoff_ms(attempt, max_backoff);
         let due_at = Instant::now() + Duration::from_millis(delay_ms);
 

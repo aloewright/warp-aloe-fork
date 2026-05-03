@@ -12,6 +12,7 @@ use orchestrator::{AgentRegistration, Budget, Cap, Provider, Router};
 use symphony::audit::AuditLog;
 use symphony::orchestrator::{IssueSource, Orchestrator};
 use symphony::linear_graphql::LinearGraphQlTool;
+use symphony::reload::{WorkflowHandle, WorkflowWatcher};
 use symphony::tracker::LinearClient;
 use symphony::workflow::WorkflowDefinition;
 use symphony::workspace::WorkspaceManager;
@@ -45,26 +46,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
     let workflow = WorkflowDefinition::load(&cli.workflow)?;
+    // PDX-111: wrap the parsed definition in a swap-able handle so the live
+    // reload watcher and the orchestrator share the same authoritative
+    // pointer. All static-at-startup wiring below (workspace root, tracker
+    // endpoint, hooks) reads the *initial* snapshot — those surfaces are
+    // not hot-reloadable on purpose; only `polling`, `agent.*`, and
+    // `tracker.active_states`/labels actually take effect on subsequent
+    // ticks. Mutating `workspace.root` is rejected by the reload watcher.
+    let workflow_handle = Arc::new(WorkflowHandle::new(workflow));
+    let initial = workflow_handle.load();
 
-    let api_key = resolve_api_key(&workflow.config.tracker.api_key).await?;
+    let api_key = resolve_api_key(&initial.config.tracker.api_key).await?;
 
-    let tracker = match &workflow.config.tracker.team_key {
+    let tracker = match &initial.config.tracker.team_key {
         Some(team_key) => LinearClient::new_with_team(
-            workflow.config.tracker.endpoint.clone(),
+            initial.config.tracker.endpoint.clone(),
             api_key,
-            workflow.config.tracker.project_slug.clone(),
+            initial.config.tracker.project_slug.clone(),
             team_key.clone(),
         )?,
         None => LinearClient::new(
-            workflow.config.tracker.endpoint.clone(),
+            initial.config.tracker.endpoint.clone(),
             api_key,
-            workflow.config.tracker.project_slug.clone(),
+            initial.config.tracker.project_slug.clone(),
         )?,
     };
 
     let workspaces = Arc::new(WorkspaceManager::new(
-        workflow.config.workspace.root.clone(),
-        workflow.config.hooks.clone(),
+        initial.config.workspace.root.clone(),
+        initial.config.hooks.clone(),
     ));
 
     let mut caps: HashMap<Provider, Cap> = HashMap::new();
@@ -95,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // GitHub/Slack/generic webhook receiver) before the orchestrator
     // takes over the main task. These run in their own tokio tasks and
     // never block the orchestrator. PDX-26 D3.
-    let trigger_surfaces = symphony::spawn_triggers(&workflow.config.server, audit.clone()).await;
+    let trigger_surfaces = symphony::spawn_triggers(&initial.config.server, audit.clone()).await;
     if let Err(e) = &trigger_surfaces {
         tracing::warn!(error = %e, "trigger surfaces failed to start; continuing without them");
     }
@@ -118,21 +128,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // executes GraphQL on the agent's behalf without ever exposing the
     // API token to the subprocess.
     let tracker_arc = Arc::new(tracker);
-    let rate_per_minute = workflow.config.agent.linear_graphql_rate_per_minute;
+    let rate_per_minute = initial.config.agent.linear_graphql_rate_per_minute;
     let linear_graphql_tool = LinearGraphQlTool::with_rate(
         Arc::clone(&tracker_arc) as Arc<dyn symphony::linear_graphql::LinearGraphQlExecutor>,
         rate_per_minute,
     );
+    // Drop the local snapshot ref so the watcher and orchestrator share the
+    // handle as the only authoritative pointer.
+    drop(initial);
+
     let orch = Arc::new(
-        Orchestrator::new(
-            workflow,
+        Orchestrator::with_handle(
+            Arc::clone(&workflow_handle),
             tracker_arc as Arc<dyn IssueSource>,
             workspaces,
             router,
-            audit,
+            audit.clone(),
         )
         .with_linear_graphql_tool(linear_graphql_tool),
     );
+
+    // PDX-111: kick off the live-reload watcher. Failure to start the
+    // watcher is logged but non-fatal — the daemon still runs against the
+    // initial config.
+    let _reload_guard = match WorkflowWatcher::start(
+        cli.workflow.clone(),
+        Arc::clone(&workflow_handle),
+        audit.clone(),
+    ) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            tracing::warn!(error = %e, "symphony: live workflow reload disabled (watcher failed to start)");
+            None
+        }
+    };
 
     if cli.once {
         orch.tick().await?;

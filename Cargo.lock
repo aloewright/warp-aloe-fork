@@ -12779,6 +12779,7 @@ dependencies = [
  "github_webhook_receiver",
  "liquid",
  "mockall",
+ "notify-debouncer-full",
  "orchestrator",
  "reqwest",
  "rustls 0.23.39",
