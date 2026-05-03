@@ -29,6 +29,7 @@ default-members = [
   "crates/cron_scheduler",
   "crates/github_webhook_receiver",
   "crates/sum_tree",
+  "crates/soak_harness",
   "crates/symphony",
   "crates/warpui",
   "crates/warp_completer",
