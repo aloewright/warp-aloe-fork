@@ -116,6 +116,14 @@ pub(super) enum CliTelemetryEvent {
     HarnessSupportFinishTask { success: bool },
     /// Executing `warp skills <subcommand>` (community skills marketplace).
     Skills { subcommand: &'static str },
+    /// Executing `warp audit query`
+    AuditQuery,
+    /// Executing `warp audit follow`
+    AuditFollow,
+    /// Executing `warp audit summary`
+    AuditSummary,
+    /// Executing `warp audit sync`
+    AuditSync,
 }
 
 impl TelemetryEvent for CliTelemetryEvent {
@@ -196,6 +204,10 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::Skills { subcommand } => {
                 Some(json!({ "subcommand": subcommand }))
             }
+            CliTelemetryEvent::AuditQuery => None,
+            CliTelemetryEvent::AuditFollow => None,
+            CliTelemetryEvent::AuditSummary => None,
+            CliTelemetryEvent::AuditSync => None,
         }
     }
 
@@ -284,6 +296,10 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::New => "CLI.Execute.New",
             CliTelemetryEventDiscriminants::Skills => "CLI.Execute.Skills",
+            CliTelemetryEventDiscriminants::AuditQuery => "CLI.Execute.Audit.Query",
+            CliTelemetryEventDiscriminants::AuditFollow => "CLI.Execute.Audit.Follow",
+            CliTelemetryEventDiscriminants::AuditSummary => "CLI.Execute.Audit.Summary",
+            CliTelemetryEventDiscriminants::AuditSync => "CLI.Execute.Audit.Sync",
         }
     }
 
@@ -411,6 +427,18 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::Skills => {
                 "Ran a `warp skills` community-marketplace command"
+            }
+            CliTelemetryEventDiscriminants::AuditQuery => {
+                "Queried the symphony audit log via the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::AuditFollow => {
+                "Followed live symphony audit-log entries via the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::AuditSummary => {
+                "Summarized symphony audit-log entries via the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::AuditSync => {
+                "Mirrored symphony audit-log entries to the cloud control plane via the Warp CLI"
             }
         }
     }
