@@ -25,6 +25,7 @@ default-members = [
   "crates/template_hooks",
   "crates/templates",
   "crates/sum_tree",
+  "crates/soak_harness",
   "crates/symphony",
   "crates/warpui",
   "crates/warp_completer",
