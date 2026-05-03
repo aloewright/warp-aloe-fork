@@ -394,6 +394,76 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// PDX-121 [E9] task 2 — user-selectable default coding agent.
+///
+/// When set to anything other than `Auto`, the dispatcher pre-pins the
+/// matching `orchestrator::Provider` for any session that hasn't been
+/// pinned by the in-prompt selector. `Auto` (the default) preserves the
+/// existing Router tie-break behaviour.
+///
+/// Persisted under `agents.default_coding_agent` so this is a *new* TOML
+/// key — it does not touch any existing serde keys, which means upgrading
+/// users land on `Auto` with zero migration churn.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "The provider to default to when dispatching coding-agent tasks.",
+    rename_all = "kebab-case"
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefaultCodingAgent {
+    /// Defer to the orchestrator Router's tie-break (current behaviour).
+    #[default]
+    Auto,
+    /// The local Warp orchestrator agent. Aliased to FoundationModels under
+    /// the hood since that is the Provider variant the local agent
+    /// registers as today.
+    Local,
+    /// Anthropic Claude Code CLI.
+    ClaudeCode,
+    /// OpenAI Codex CLI.
+    Codex,
+    /// Local Ollama models.
+    Ollama,
+    /// Apple FoundationModels-backed local agent.
+    FoundationModels,
+}
+
+settings::macros::implement_setting_for_enum!(
+    DefaultCodingAgent,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.default_coding_agent",
+    description: "The default coding agent provider used when dispatching agent tasks.",
+);
+
+impl DefaultCodingAgent {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DefaultCodingAgent::Auto => "Auto (router decides)",
+            DefaultCodingAgent::Local => "Local (Warp)",
+            DefaultCodingAgent::ClaudeCode => "Claude Code",
+            DefaultCodingAgent::Codex => "Codex",
+            DefaultCodingAgent::Ollama => "Ollama",
+            DefaultCodingAgent::FoundationModels => "Foundation Models",
+        }
+    }
+}
+
 /// Tracks the state of the quota reset banner
 #[derive(
     Debug,
@@ -1388,6 +1458,13 @@ define_settings_group!(AISettings, settings: [
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
 
+    // PDX-121 [E9] task 2: user-selectable default coding agent. When set
+    // to anything other than `Auto`, the dispatcher pre-pins the matching
+    // `orchestrator::Provider` for any session that has not been pinned by
+    // the in-prompt selector. `Auto` defers to Router tie-break (the
+    // pre-PDX-121 behaviour). Use `default_coding_agent()` getter.
+    default_coding_agent: DefaultCodingAgent,
+
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
     // When false, commands run by the AI agent are excluded from history.
@@ -1505,6 +1582,19 @@ impl AISettings {
         *self.is_any_ai_enabled
             && !is_anonymous_or_logged_out
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
+    }
+
+    /// PDX-121 [E9] task 2 — current default coding agent.
+    ///
+    /// Returns the persisted [`DefaultCodingAgent`] (defaults to
+    /// [`DefaultCodingAgent::Auto`] for fresh installs / users who never
+    /// touched the setting). The dispatcher consults this through the
+    /// process-wide `local_orchestrator::DEFAULT_CODING_AGENT` latch which
+    /// is updated by the AI page's
+    /// `AISettingsPageAction::SetDefaultCodingAgent` handler — this
+    /// getter is the read side for that wiring and for tests.
+    pub fn default_coding_agent(&self) -> DefaultCodingAgent {
+        *self.default_coding_agent.value()
     }
 
     pub fn default_session_mode(&self, app: &AppContext) -> DefaultSessionMode {

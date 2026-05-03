@@ -746,3 +746,22 @@ fn test_mark_quota_banner_as_dismissed() {
         });
     });
 }
+
+/// PDX-121 [E9] task 6: a fresh install (no TOML overrides applied) must
+/// surface `DefaultCodingAgent::Auto` from `AISettings::default_coding_agent()`.
+/// `Auto` preserves the legacy Router tie-break behaviour so the new
+/// setting is non-breaking by default.
+#[test]
+fn test_default_coding_agent_auto_for_fresh_install() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(
+                settings.default_coding_agent(),
+                DefaultCodingAgent::Auto,
+                "fresh install must default to DefaultCodingAgent::Auto"
+            );
+        });
+    });
+}
