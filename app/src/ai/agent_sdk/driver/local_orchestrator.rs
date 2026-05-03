@@ -231,11 +231,7 @@ impl LocalOrchestratorAgent {
     /// Returns `None` if nothing is staged (which shouldn't happen on the
     /// hot path; the caller stages immediately before reading).
     pub(crate) async fn peek_staged_prompt(&self) -> Option<AgentRunPrompt> {
-        self.staged
-            .lock()
-            .await
-            .as_ref()
-            .map(|s| s.prompt.clone())
+        self.staged.lock().await.as_ref().map(|s| s.prompt.clone())
     }
 }
 
@@ -284,12 +280,10 @@ impl Agent for LocalOrchestratorAgent {
     /// Pulls the staged foreground+prompt off the mutex, then translates the
     /// driver's [`SDKConversationOutputStatus`] into orchestrator events.
     async fn execute(&self, task: Task) -> Result<AgentEventStream, AgentError> {
-        let staged = self
-            .staged
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| AgentError::Other("local orchestrator: no staged run".to_string()))?;
+        let staged =
+            self.staged.lock().await.take().ok_or_else(|| {
+                AgentError::Other("local orchestrator: no staged run".to_string())
+            })?;
         let StagedRun { foreground, prompt } = staged;
         let task_id = task.id;
 
@@ -449,10 +443,8 @@ pub(crate) fn persistent_enforcer() -> Arc<super::budget_enforcer::BudgetEnforce
 /// Returns the `Arc<LocalOrchestratorAgent>` so the caller can stage a run on
 /// it via [`LocalOrchestratorAgent::stage_run`] without re-fetching it from
 /// the router (the router stores `Arc<dyn Agent>` and downcasting is awkward).
-pub(crate) async fn ensure_persistent_router() -> (
-    Arc<AsyncMutex<Router>>,
-    Arc<LocalOrchestratorAgent>,
-) {
+pub(crate) async fn ensure_persistent_router(
+) -> (Arc<AsyncMutex<Router>>, Arc<LocalOrchestratorAgent>) {
     // Note: the `Arc<LocalOrchestratorAgent>` we return is the *same* one
     // registered into the router, so `stage_run` and `Agent::execute` race
     // through the same mutex.
@@ -466,9 +458,7 @@ pub(crate) async fn ensure_persistent_router() -> (
             // Build the budget once and stash it in `GLOBAL_BUDGET` so
             // PDX-27's budget enforcer can debit and read the same
             // accounting state the router consults at select-time.
-            let budget = GLOBAL_BUDGET
-                .get_or_init(build_persistent_budget)
-                .clone();
+            let budget = GLOBAL_BUDGET.get_or_init(build_persistent_budget).clone();
             let mut router = Router::new(budget);
             router.register(AgentRegistration {
                 agent: local_agent.clone() as Arc<dyn Agent>,
@@ -511,8 +501,10 @@ pub(crate) async fn ensure_persistent_router() -> (
 pub(crate) async fn ensure_claude_code_registered(router: &Arc<AsyncMutex<Router>>) {
     use agents::{ClaudeCodeAgent, ClaudeModel};
 
-    match ClaudeCodeAgent::new(AgentId(CLAUDE_CODE_SONNET_46_ID.to_string()), ClaudeModel::Sonnet46)
-    {
+    match ClaudeCodeAgent::new(
+        AgentId(CLAUDE_CODE_SONNET_46_ID.to_string()),
+        ClaudeModel::Sonnet46,
+    ) {
         Ok(agent) => {
             let mut router = router.lock().await;
             router.register(AgentRegistration {
@@ -560,8 +552,10 @@ pub(crate) async fn refresh_claude_code_registration() {
 pub(crate) async fn ensure_claude_code_haiku_registered(router: &Arc<AsyncMutex<Router>>) {
     use agents::{ClaudeCodeAgent, ClaudeModel};
 
-    match ClaudeCodeAgent::new(AgentId(CLAUDE_CODE_HAIKU_45_ID.to_string()), ClaudeModel::Haiku45)
-    {
+    match ClaudeCodeAgent::new(
+        AgentId(CLAUDE_CODE_HAIKU_45_ID.to_string()),
+        ClaudeModel::Haiku45,
+    ) {
         Ok(agent) => {
             let mut router = router.lock().await;
             router.register(AgentRegistration {
@@ -725,10 +719,7 @@ pub(crate) fn codex_signed_in() -> Option<bool> {
             .and_then(|v| v.as_str())
             .map(|s| !s.is_empty())
             .unwrap_or(false)
-        || json
-            .get("tokens")
-            .map(|v| !v.is_null())
-            .unwrap_or(false);
+        || json.get("tokens").map(|v| !v.is_null()).unwrap_or(false);
     Some(signed_in)
 }
 
@@ -949,6 +940,81 @@ pub(crate) fn consume_claude_code_pin() -> bool {
     }
 }
 
+/// PDX-121 [E9] task 4 — process-wide latch for the user's
+/// `DefaultCodingAgent` setting.
+///
+/// The AI page action handler
+/// (`AISettingsPageAction::SetDefaultCodingAgent`) writes here whenever
+/// the persisted setting changes; the dispatcher
+/// (`run_via_local_orchestrator`) reads via [`apply_default_coding_agent_pin`]
+/// and pre-pins the matching [`Provider`] *only* when no explicit
+/// in-prompt selector pin is currently set. The latch is keyed by
+/// `Provider` (or `None` for `Auto`) so the dispatch site does not need
+/// to know about the higher-level `DefaultCodingAgent` enum.
+///
+/// The fallback ordering matches PDX-105's contract — the in-prompt
+/// selector still wins, and the default only applies on turns where the
+/// user did not explicitly pick a provider for that turn.
+static DEFAULT_CODING_AGENT_PROVIDER: OnceLock<StdMutex<Option<Provider>>> = OnceLock::new();
+
+fn default_coding_agent_slot() -> &'static StdMutex<Option<Provider>> {
+    DEFAULT_CODING_AGENT_PROVIDER.get_or_init(|| StdMutex::new(None))
+}
+
+/// PDX-121 [E9] task 4 — set the process-wide default coding agent
+/// provider. `None` clears the default (matches `DefaultCodingAgent::Auto`).
+///
+/// Called from the AI page action handler whenever
+/// `AISettings::default_coding_agent` is mutated. Idempotent and cheap.
+pub(crate) fn set_default_coding_agent(provider: Option<Provider>) {
+    let mut slot = default_coding_agent_slot()
+        .lock()
+        .expect("DEFAULT_CODING_AGENT_PROVIDER mutex is never poisoned");
+    *slot = provider;
+}
+
+/// Read the current default coding agent provider without consuming it.
+/// Unlike [`consume_provider_pin`], the default is *not* a per-turn
+/// latch — it persists for the life of the process (until the user
+/// changes the setting again).
+pub(crate) fn current_default_coding_agent() -> Option<Provider> {
+    let slot = default_coding_agent_slot()
+        .lock()
+        .expect("DEFAULT_CODING_AGENT_PROVIDER mutex is never poisoned");
+    *slot
+}
+
+/// PDX-121 [E9] task 4 — apply the default coding agent pin for the
+/// upcoming turn iff no explicit per-turn pin already exists.
+///
+/// The dispatcher calls this *before* it reads the per-turn pin via
+/// [`consume_provider_pin`]. If the user has set a default
+/// (`DefaultCodingAgent != Auto`) and there is no current per-turn pin
+/// from the in-prompt selector, the default is written into the
+/// per-turn slot so the existing dispatch logic picks it up uniformly.
+///
+/// Returns `true` if a default was applied, `false` otherwise (either
+/// because there is no default set, or because an explicit pin already
+/// exists). The return value is mostly useful for tests.
+pub(crate) fn apply_default_coding_agent_pin() -> bool {
+    let default = current_default_coding_agent();
+    let Some(provider) = default else {
+        return false;
+    };
+
+    // Only apply the default when there is no explicit per-turn pin.
+    // Locking the per-turn slot for inspect-and-write keeps the
+    // explicit-pin-wins guarantee atomic.
+    let mut slot = provider_pin_slot()
+        .lock()
+        .expect("PROVIDER_PIN mutex is never poisoned");
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(provider);
+    true
+}
+
 /// Process-wide [`McpForwarder`] (PDX-105 [B3] task 1).
 ///
 /// One forwarder per process. The persistent [`Router`] dispatches every
@@ -1019,9 +1085,7 @@ mod tests {
         // while holding the guard. We unwrap-or-into-inner to keep
         // running on the same data; the data is `()` so there's
         // nothing to recover.
-        PIN_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        PIN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn worker_task() -> Task {
@@ -1110,11 +1174,7 @@ mod tests {
         set_provider_pin(None);
         assert_eq!(consume_provider_pin(), None);
 
-        for provider in [
-            Provider::ClaudeCode,
-            Provider::Codex,
-            Provider::Ollama,
-        ] {
+        for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Ollama] {
             set_provider_pin(Some(provider));
             assert_eq!(consume_provider_pin(), Some(provider));
             // Read-and-clear: next consume is `None`.
@@ -1228,6 +1288,68 @@ mod tests {
         assert_eq!(consume_provider_pin(), None);
     }
 
+    /// PDX-121 [E9] task 4: setting the default coding agent and then
+    /// invoking the dispatch hook plants the matching `Provider` into the
+    /// per-turn pin slot, so the existing `consume_provider_pin` /
+    /// `or_else` chain in `run_via_local_orchestrator` picks it up
+    /// without any additional plumbing.
+    #[test]
+    fn default_coding_agent_pin_seeds_per_turn_slot_when_unset() {
+        let _g = pin_test_guard();
+        // Reset both latches to a known baseline; other tests in the
+        // same process may have left state behind.
+        set_provider_pin(None);
+        set_default_coding_agent(None);
+        assert_eq!(consume_provider_pin(), None);
+
+        // ClaudeCode default + no explicit per-turn pin → default applied.
+        set_default_coding_agent(Some(Provider::ClaudeCode));
+        assert!(apply_default_coding_agent_pin());
+        assert_eq!(consume_provider_pin(), Some(Provider::ClaudeCode));
+
+        // Cleanup.
+        set_default_coding_agent(None);
+    }
+
+    /// PDX-121 [E9] task 4 + task 6: when an explicit per-turn pin
+    /// already exists (from the in-prompt selector), the default coding
+    /// agent must NOT overwrite it. The selector wins per-turn; the
+    /// default is just the fallback.
+    #[test]
+    fn default_coding_agent_respects_explicit_per_turn_pin() {
+        let _g = pin_test_guard();
+        set_provider_pin(None);
+        set_default_coding_agent(None);
+
+        // Simulate the in-prompt selector setting Codex for this turn.
+        set_provider_pin(Some(Provider::Codex));
+        // Then user has Claude Code as default in settings.
+        set_default_coding_agent(Some(Provider::ClaudeCode));
+
+        // Apply the default — must be a no-op because Codex is already
+        // pinned for this turn.
+        assert!(!apply_default_coding_agent_pin());
+
+        // Per-turn pin still reflects Codex (explicit wins over default).
+        assert_eq!(consume_provider_pin(), Some(Provider::Codex));
+
+        // Cleanup.
+        set_default_coding_agent(None);
+    }
+
+    /// PDX-121 [E9] task 4: with the default cleared
+    /// (`DefaultCodingAgent::Auto`), the dispatch hook is a no-op even
+    /// when no per-turn pin exists — preserves Router tie-break behaviour.
+    #[test]
+    fn default_coding_agent_auto_is_a_noop() {
+        let _g = pin_test_guard();
+        set_provider_pin(None);
+        set_default_coding_agent(None);
+
+        assert!(!apply_default_coding_agent_pin());
+        assert_eq!(consume_provider_pin(), None);
+    }
+
     /// PDX-103 [B1] task 4: `encode_prompt_for_subprocess` round-trips
     /// `Local` prompts losslessly and falls back to an empty string for
     /// `ServerSide` prompts.
@@ -1288,9 +1410,7 @@ mod tests {
     #[test]
     fn infer_role_uses_local_text_and_falls_back_for_server_side() {
         assert_eq!(
-            infer_role_from_prompt(&AgentRunPrompt::Local(
-                "Summarize git history".to_string()
-            )),
+            infer_role_from_prompt(&AgentRunPrompt::Local("Summarize git history".to_string())),
             Role::Summarize
         );
         assert_eq!(

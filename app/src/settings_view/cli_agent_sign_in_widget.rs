@@ -25,7 +25,7 @@ use warpui::ui_components::{
     button::ButtonVariant,
     components::{Coords, UiComponent, UiComponentStyles},
 };
-use warpui::AppContext;
+use warpui::{AppContext, SingletonEntity};
 
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
 use super::settings_page::{
@@ -321,10 +321,39 @@ impl SettingsWidget for CliAgentSignInWidget {
         &self,
         _view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
+
+        // PDX-121 [E9] task 5 — informational header showing whether the
+        // in-prompt model selector is currently visible. Read-only: the
+        // toggle itself lives in Settings → AI → AI features → Show model
+        // selectors in prompt; this line just surfaces its state at the
+        // top of the agent sign-in widget so users know where to look
+        // when they ask "why don't I see an agent picker in my terminal?"
+        let selector_on = *crate::terminal::session_settings::SessionSettings::as_ref(app)
+            .show_model_selectors_in_prompt;
+        let selector_indicator_text: &'static str = if selector_on {
+            "In-prompt agent selector: ON"
+        } else {
+            "In-prompt agent selector: OFF — Settings → AI → AI features → Show model selectors in prompt"
+        };
+        let selector_indicator = Container::new(
+            Align::new(
+                Text::new_inline(
+                    selector_indicator_text,
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE,
+                )
+                .with_color(theme.nonactive_ui_text_color().into())
+                .finish(),
+            )
+            .left()
+            .finish(),
+        )
+        .with_padding_bottom(8.)
+        .finish();
 
         let header = Container::new(
             Align::new(
@@ -412,15 +441,14 @@ impl SettingsWidget for CliAgentSignInWidget {
         .with_padding_bottom(8.)
         .finish();
 
-        let gateway_endpoint_banner: Box<dyn Element> = Container::new(
-            render_settings_info_banner(
+        let gateway_endpoint_banner: Box<dyn Element> =
+            Container::new(render_settings_info_banner(
                 "Gateway endpoint",
                 Some(&gateway.endpoint_summary()),
                 appearance,
-            ),
-        )
-        .with_padding_bottom(12.)
-        .finish();
+            ))
+            .with_padding_bottom(12.)
+            .finish();
 
         let gateway_claude_btn_label = if gateway.claude_enabled {
             "Disable gateway routing for Claude Code"
@@ -466,16 +494,11 @@ impl SettingsWidget for CliAgentSignInWidget {
 
         // ── Claude Code row ────────────────────────────────────────────
         let claude_state = CliAgentAuthState::detect_claude();
-        let claude_banner: Option<Box<dyn Element>> = claude_state
-            .banner(CliAgent::Claude)
-            .map(|(title, sub)| {
-                Container::new(render_settings_info_banner(
-                    &title,
-                    Some(&sub),
-                    appearance,
-                ))
-                .with_padding_bottom(12.)
-                .finish()
+        let claude_banner: Option<Box<dyn Element>> =
+            claude_state.banner(CliAgent::Claude).map(|(title, sub)| {
+                Container::new(render_settings_info_banner(&title, Some(&sub), appearance))
+                    .with_padding_bottom(12.)
+                    .finish()
             });
         let claude_btn_builder = ui_builder
             .button(ButtonVariant::Accent, self.claude_button.clone())
@@ -494,16 +517,11 @@ impl SettingsWidget for CliAgentSignInWidget {
 
         // ── Codex row (PDX-104 [B2] task 5) ────────────────────────────
         let codex_state = CliAgentAuthState::detect_codex();
-        let codex_banner: Option<Box<dyn Element>> = codex_state
-            .banner(CliAgent::Codex)
-            .map(|(title, sub)| {
-                Container::new(render_settings_info_banner(
-                    &title,
-                    Some(&sub),
-                    appearance,
-                ))
-                .with_padding_bottom(12.)
-                .finish()
+        let codex_banner: Option<Box<dyn Element>> =
+            codex_state.banner(CliAgent::Codex).map(|(title, sub)| {
+                Container::new(render_settings_info_banner(&title, Some(&sub), appearance))
+                    .with_padding_bottom(12.)
+                    .finish()
             });
         let codex_btn_builder = ui_builder
             .button(ButtonVariant::Accent, self.codex_button.clone())
@@ -559,6 +577,9 @@ impl SettingsWidget for CliAgentSignInWidget {
 
         // ── Compose ────────────────────────────────────────────────────
         let mut children: Vec<Box<dyn Element>> = vec![
+            // PDX-121 [E9] task 5: informational header — stays at the
+            // very top, ABOVE the gateway routing block.
+            selector_indicator,
             // PDX-118 [E6]: gateway routing block.
             gateway_header,
             gateway_description,

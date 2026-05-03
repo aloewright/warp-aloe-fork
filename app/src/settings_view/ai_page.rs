@@ -27,10 +27,10 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsWithByok, CodeSettings, CodebaseContextEnabled,
-    FileBasedMcpEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled, RuleSuggestionsEnabled,
-    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    DefaultCodingAgent, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
+    IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled, MemoryEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
@@ -448,6 +448,10 @@ pub struct AISettingsPageView {
     last_synced_context_window_editor_value: Option<u32>,
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    /// PDX-121 [E9] task 3: dropdown driving the persisted
+    /// `AISettings::default_coding_agent` setting (renders inside
+    /// `DefaultCodingAgentWidget`).
+    default_coding_agent_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
     conversation_layout_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
 
@@ -584,6 +588,37 @@ impl AISettingsPageView {
                     ctx,
                 );
             });
+        }
+
+        // PDX-121 [E9] task 3: build the default-coding-agent dropdown and
+        // sync its selection from the persisted setting. We also push the
+        // current setting into the local orchestrator's process-wide
+        // latch so the dispatcher honours the user's choice from the
+        // very first turn after app start (not just after they touch the
+        // dropdown again).
+        let default_coding_agent_dropdown = DefaultCodingAgentWidget::create_dropdown(ctx);
+        {
+            let current = AISettings::as_ref(ctx).default_coding_agent();
+            default_coding_agent_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetDefaultCodingAgent(current),
+                    ctx,
+                );
+            });
+            #[cfg(not(target_family = "wasm"))]
+            {
+                use crate::ai::agent_sdk::driver::local_orchestrator;
+                let provider = match current {
+                    DefaultCodingAgent::Auto => None,
+                    DefaultCodingAgent::Local | DefaultCodingAgent::FoundationModels => {
+                        Some(orchestrator::Provider::FoundationModels)
+                    }
+                    DefaultCodingAgent::ClaudeCode => Some(orchestrator::Provider::ClaudeCode),
+                    DefaultCodingAgent::Codex => Some(orchestrator::Provider::Codex),
+                    DefaultCodingAgent::Ollama => Some(orchestrator::Provider::Ollama),
+                };
+                local_orchestrator::set_default_coding_agent(provider);
+            }
         }
 
         let autonomy_dropdown_menu = ctx.add_typed_action_view(|ctx| {
@@ -983,6 +1018,16 @@ impl AISettingsPageView {
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_action(
                                 AISettingsPageAction::SetThinkingDisplayMode(current_mode),
+                                ctx,
+                            );
+                        });
+                }
+                AISettingsChangedEvent::DefaultCodingAgent { .. } => {
+                    let current = AISettings::as_ref(ctx).default_coding_agent();
+                    me.default_coding_agent_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetDefaultCodingAgent(current),
                                 ctx,
                             );
                         });
@@ -1426,6 +1471,7 @@ impl AISettingsPageView {
             mcp_denylist_dropdown,
             mcp_denylist_mouse_state_handles,
             thinking_display_mode_dropdown,
+            default_coding_agent_dropdown,
             #[cfg(feature = "local_fs")]
             conversation_layout_dropdown,
             profile_views,
@@ -1506,6 +1552,10 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(CLIAgentWidget::default()));
+                // PDX-121 [E9] task 3: default-coding-agent setting sits
+                // immediately above the sign-in row so the dropdown lives
+                // on the same page where users wire up their CLIs.
+                widgets.push(Box::new(DefaultCodingAgentWidget));
                 // PDX-103 [B1] task 6: coding-agent sign-in row sits ABOVE
                 // the API keys (BYOK) section. PDX-104 (B2) appends Codex +
                 // Ollama rows inside this widget.
@@ -1557,6 +1607,9 @@ impl AISettingsPageView {
                 if voice_supported {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
+                // PDX-121 [E9] task 3: default-coding-agent setting sits
+                // immediately above the sign-in row.
+                widgets.push(Box::new(DefaultCodingAgentWidget));
                 // PDX-103 [B1] task 6: same sign-in row above BYOK on this subpage.
                 widgets.push(Box::new(
                     super::cli_agent_sign_in_widget::CliAgentSignInWidget::default(),
@@ -1585,6 +1638,10 @@ impl AISettingsPageView {
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
                 widgets.push(Box::new(CLIAgentWidget::default()));
+                // PDX-121 [E9] task 3: default-coding-agent setting sits
+                // immediately above the sign-in row on the dedicated
+                // third-party agents subpage too.
+                widgets.push(Box::new(DefaultCodingAgentWidget));
                 // PDX-103 [B1] task 6: same sign-in row reused on the
                 // dedicated third-party agents subpage.
                 widgets.push(Box::new(
@@ -2240,6 +2297,10 @@ pub enum AISettingsPageAction {
     ToggleShowAgentTips,
     ToggleShowOzUpdatesInZeroState,
     SetThinkingDisplayMode(ThinkingDisplayMode),
+    /// PDX-121 [E9] task 3: change the persisted default coding agent and
+    /// push the matching `Provider` into the local orchestrator's
+    /// process-wide latch so subsequent dispatches honour it.
+    SetDefaultCodingAgent(crate::settings::DefaultCodingAgent),
     AttemptLoginGatedUpgrade,
     RemoveCLIAgentToolbarEnabledCommand(String),
     RemoveFromCommandExecutionAllowlist(AgentModeCommandExecutionPredicate),
@@ -2927,6 +2988,34 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.thinking_display_mode.set_value(*mode, ctx));
                 });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetDefaultCodingAgent(default) => {
+                // Persist the new default in AISettings.
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.default_coding_agent.set_value(*default, ctx));
+                });
+
+                // PDX-121 [E9] task 4: notify the local orchestrator so the
+                // dispatcher's process-wide latch reflects the user's choice
+                // immediately (no app restart). The wasm build does not
+                // dispatch through the local orchestrator, so the bridge is
+                // gated to the same `cfg` as the rest of the dispatch path.
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    use crate::ai::agent_sdk::driver::local_orchestrator;
+                    use crate::settings::DefaultCodingAgent;
+                    let provider = match default {
+                        DefaultCodingAgent::Auto => None,
+                        DefaultCodingAgent::Local | DefaultCodingAgent::FoundationModels => {
+                            Some(orchestrator::Provider::FoundationModels)
+                        }
+                        DefaultCodingAgent::ClaudeCode => Some(orchestrator::Provider::ClaudeCode),
+                        DefaultCodingAgent::Codex => Some(orchestrator::Provider::Codex),
+                        DefaultCodingAgent::Ollama => Some(orchestrator::Provider::Ollama),
+                    };
+                    local_orchestrator::set_default_coding_agent(provider);
+                }
                 ctx.notify();
             }
             AISettingsPageAction::AttemptLoginGatedUpgrade => {
@@ -6008,6 +6097,90 @@ impl SettingsWidget for OtherAIWidget {
         }
 
         column.finish()
+    }
+}
+
+/// PDX-121 [E9] task 3 — settings widget that hosts the default
+/// coding-agent dropdown.
+///
+/// Renders a single dropdown bound to
+/// [`AISettingsPageAction::SetDefaultCodingAgent`]. The dropdown view
+/// itself lives on [`AISettingsPageView::default_coding_agent_dropdown`]
+/// so it survives across rebuilds of the widget list.
+///
+/// Pushed onto the AI subpage widget stack immediately above the
+/// `CliAgentSignInWidget` so users see the default-agent control on the
+/// same page as the coding-agent sign-in flows.
+struct DefaultCodingAgentWidget;
+
+impl DefaultCodingAgentWidget {
+    fn create_dropdown(
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let items: Vec<DropdownItem<AISettingsPageAction>> = DefaultCodingAgent::iter()
+            .map(|variant| {
+                DropdownItem::new(
+                    variant.display_name(),
+                    AISettingsPageAction::SetDefaultCodingAgent(variant),
+                )
+            })
+            .collect();
+
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.add_items(items, ctx);
+            dropdown
+        })
+    }
+}
+
+impl SettingsWidget for DefaultCodingAgentWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "default coding agent provider claude code codex ollama foundation models local warp router auto pin"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
+
+        Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                build_sub_header(
+                    appearance,
+                    "Default coding agent",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            )
+            .with_child(render_dropdown_item(
+                appearance,
+                "Default coding agent",
+                Some(
+                    "Provider used when dispatching agent tasks. \"Auto\" defers to the orchestrator's tie-break (current behaviour). Pick a specific agent to make it the default for new sessions; the in-prompt selector still wins per-turn.",
+                ),
+                None,
+                LocalOnlyIconState::for_setting(
+                    DefaultCodingAgent::storage_key(),
+                    DefaultCodingAgent::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+                &view.default_coding_agent_dropdown,
+            ))
+            .finish()
     }
 }
 

@@ -744,6 +744,17 @@ impl AgentDriver {
         // the in-prompt selector. The latch is consume-and-clear and now
         // covers all three providers (Claude Code, Codex, Ollama), not
         // just Claude.
+        //
+        // PDX-121 [E9] task 4: before consulting the per-turn latch, give
+        // the user's persisted `DefaultCodingAgent` setting a chance to
+        // populate the latch. `apply_default_coding_agent_pin` is a
+        // no-op when (a) the default is `Auto` (default cleared) or
+        // (b) an explicit per-turn pin from the selector already exists.
+        // This preserves the "explicit wins over default" precedence the
+        // PDX-105 tests assert.
+        if pinned_provider.is_none() {
+            local_orchestrator::apply_default_coding_agent_pin();
+        }
         let pinned_provider =
             pinned_provider.or_else(local_orchestrator::consume_provider_pin);
 
