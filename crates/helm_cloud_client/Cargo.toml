@@ -1,0 +1,50 @@
+[package]
+name = "helm_cloud_client"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Native HTTP + WebSocket client for the helm-cloud control plane (PDX-119)."
+
+# Native-only: this crate uses tokio-tungstenite + reqwest and is intentionally
+# not part of the wasm32 build set. The cloud-environment UI consumes this
+# crate behind a `cfg(not(target_family = "wasm"))` gate at the call site.
+
+[dependencies]
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+    "io-util",
+    "fs",
+] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+toml_edit = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true, features = ["ws"] }
+hyper = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "test-util",
+] }
+tower = { workspace = true }
+tempfile = { workspace = true }

@@ -20,6 +20,7 @@ default-members = [
   "crates/doppler_mcp",
   "crates/editor",
   "crates/graphql",
+  "crates/helm_cloud_client",
   "crates/markdown_parser",
   "crates/orchestrator",
   "crates/prompts",
@@ -67,6 +68,7 @@ firebase = { path = "crates/firebase" }
 foundation_models = { path = "crates/foundation_models" }
 fuzzy_match = { path = "crates/fuzzy_match" }
 handlebars = { path = "crates/handlebars" }
+helm_cloud_client = { path = "crates/helm_cloud_client" }
 http_client = { path = "crates/http_client" }
 http_server = { path = "crates/http_server" }
 input_classifier = { path = "crates/input_classifier" }
