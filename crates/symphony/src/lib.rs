@@ -17,6 +17,7 @@ pub mod linear_graphql;
 pub mod numstat;
 pub mod orchestrator;
 pub mod reload;
+pub mod simulator_tool;
 pub mod tracker;
 pub mod triggers;
 pub mod workflow;
@@ -27,6 +28,10 @@ pub use diff_guard::{DiffGuard, DiffGuardError, DiffStat};
 pub use linear_graphql::{LinearGraphQlExecutor, LinearGraphQlTool, DEFAULT_RATE_PER_MINUTE, TOOL_NAME};
 pub use orchestrator::{Orchestrator, OrchestratorError};
 pub use reload::{apply_reload, WatchError, WorkflowHandle, WorkflowWatcher};
+pub use simulator_tool::{
+    SimulatorExecutor, SimulatorOp, SimulatorTool, SimulatorToolError,
+    XcrunSimulatorExecutor, TOOL_NAME as SIMULATOR_TOOL_NAME,
+};
 pub use tracker::{BlockerRef, Issue, LinearClient, TrackerError};
 pub use triggers::{spawn_triggers, TriggerError, TriggerSurfaces};
 pub use workflow::{

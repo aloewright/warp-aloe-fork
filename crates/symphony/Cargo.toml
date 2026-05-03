@@ -14,6 +14,11 @@ path = "src/main.rs"
 orchestrator = { workspace = true }
 agents = { workspace = true }
 auto_healing = { workspace = true }
+# PDX-113: simulator_hooks is consumed only on macOS — on other platforms
+# the dep compiles to an empty stub (the crate gates its surface with
+# cfg(target_os = "macos"))). Listed unconditionally so the workspace
+# resolver always sees the same graph.
+simulator_hooks = { workspace = true }
 doppler = { workspace = true }
 cron_scheduler = { workspace = true }
 github_webhook_receiver = { workspace = true }
