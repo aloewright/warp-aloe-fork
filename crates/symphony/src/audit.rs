@@ -44,6 +44,16 @@ pub enum AuditEventKind {
     RetryDispatched,
     /// Retry attempts exhausted; the issue is left in its current state.
     RetryGivenUp,
+    /// `WORKFLOW.md` was re-read from disk and the new definition is live.
+    /// Emitted by the live-reload watcher (PDX-111).
+    WorkflowReloaded,
+    /// A reload re-read `WORKFLOW.md` but parsing failed; the previous
+    /// definition is kept live. Emitted by the live-reload watcher.
+    WorkflowReloadFailed,
+    /// A reload parsed successfully but mutated an immutable field
+    /// (currently only `workspace.root`); the previous definition is kept
+    /// live. Emitted by the live-reload watcher.
+    WorkflowReloadRejected,
 }
 
 /// Single audit-log entry.
