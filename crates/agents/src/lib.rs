@@ -18,3 +18,17 @@ pub use codex::{CodexAgent, ReasoningEffort, ServiceTier};
 pub use foundation_models::FoundationModelsAgent;
 pub use ollama::OllamaAgent;
 pub use remote::RemoteAgent;
+
+/// Predicate matching env var names that could leak Linear credentials into
+/// an agent subprocess. PDX-112 §10.5: the daemon-mediated `linear_graphql`
+/// tool is the only sanctioned path to Linear, so any inherited
+/// `LINEAR_*` env var is scrubbed before the agent CLI is exec'd.
+///
+/// Exposed for unit tests that audit the env-leak invariant directly.
+pub fn is_linear_secret_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper == "LINEAR_API_KEY"
+        || upper == "LINEAR_API_TOKEN"
+        || upper == "LINEAR_TOKEN"
+        || upper.starts_with("LINEAR_")
+}

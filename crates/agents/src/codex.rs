@@ -31,6 +31,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::is_linear_secret_env;
+
 /// Service tier requested from the upstream provider.
 ///
 /// Codex forwards this to OpenAI's responses API as `service_tier`. `Fast`
@@ -386,6 +388,16 @@ impl Agent for CodexAgent {
         }
         for (k, v) in &task.context.env {
             cmd.env(k, v);
+        }
+
+        // PDX-112 §10.5: scrub inherited Linear-credential env vars from
+        // the agent subprocess. The daemon-mediated `linear_graphql` tool
+        // is the only sanctioned path to Linear; the token must never
+        // appear in agent stdin/stdout/stderr or env.
+        for (k, _) in std::env::vars() {
+            if is_linear_secret_env(&k) {
+                cmd.env_remove(&k);
+            }
         }
 
         cmd.stdin(Stdio::null())

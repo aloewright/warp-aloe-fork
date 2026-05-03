@@ -11,6 +11,7 @@ use doppler::{CommandRunner, DopplerClient, DopplerError, SecretValue, DEFAULT_T
 use orchestrator::{AgentRegistration, Budget, Cap, Provider, Router};
 use symphony::audit::AuditLog;
 use symphony::orchestrator::{IssueSource, Orchestrator};
+use symphony::linear_graphql::LinearGraphQlTool;
 use symphony::tracker::LinearClient;
 use symphony::workflow::WorkflowDefinition;
 use symphony::workspace::WorkspaceManager;
@@ -111,13 +112,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tokio runtime tear-down handles cleanup.
     let _trigger_guard = trigger_surfaces.ok();
 
-    let orch = Arc::new(Orchestrator::new(
-        workflow,
-        Arc::new(tracker) as Arc<dyn IssueSource>,
-        workspaces,
-        router,
-        audit,
-    ));
+    // Wrap the tracker in an Arc shared between the IssueSource role
+    // (candidate fetch + comments + state transitions) and the
+    // `linear_graphql` daemon-mediated tool (PDX-112 §10.5). The tool
+    // executes GraphQL on the agent's behalf without ever exposing the
+    // API token to the subprocess.
+    let tracker_arc = Arc::new(tracker);
+    let rate_per_minute = workflow.config.agent.linear_graphql_rate_per_minute;
+    let linear_graphql_tool = LinearGraphQlTool::with_rate(
+        Arc::clone(&tracker_arc) as Arc<dyn symphony::linear_graphql::LinearGraphQlExecutor>,
+        rate_per_minute,
+    );
+    let orch = Arc::new(
+        Orchestrator::new(
+            workflow,
+            tracker_arc as Arc<dyn IssueSource>,
+            workspaces,
+            router,
+            audit,
+        )
+        .with_linear_graphql_tool(linear_graphql_tool),
+    );
 
     if cli.once {
         orch.tick().await?;
