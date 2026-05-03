@@ -6,7 +6,12 @@ import {
 import {
   validateApproval,
   DEFAULT_APPROVAL_TIMEOUT,
-  type DeployApprovalEvent
+  buildCommandForKind,
+  testCommandForKind,
+  deployCommandFor,
+  invokeRunner,
+  type DeployApprovalEvent,
+  type DeployRunnerRequest
 } from "../../src/workers/workflows/deploy-workflow.js";
 import { classifySnapshots } from "../../src/workers/workflows/watchdog-workflow.js";
 import type {
@@ -90,6 +95,100 @@ describe("DeployWorkflow.validateApproval", () => {
 
   it("exposes a non-zero default approval timeout", () => {
     expect(DEFAULT_APPROVAL_TIMEOUT).toBeTruthy();
+  });
+});
+
+describe("DeployWorkflow PDX-114 step body helpers", () => {
+  it("renders kind-aware build commands", () => {
+    expect(buildCommandForKind("cloudflare_worker")).toBe("npm run build");
+    expect(buildCommandForKind("npm_publish")).toBe("npm run build");
+    expect(buildCommandForKind("cargo_publish")).toBe("cargo build --release");
+    expect(buildCommandForKind("gh_release")).toBe("cargo build --release");
+    // Default — preserves PDX-25 console-log path.
+    expect(buildCommandForKind(undefined)).toBe("npm run build");
+  });
+
+  it("renders kind-aware test commands", () => {
+    expect(testCommandForKind("cargo_publish")).toBe("cargo test --workspace");
+    expect(testCommandForKind("gh_release")).toBe("cargo test --workspace");
+    expect(testCommandForKind("cloudflare_worker")).toBe("npm test");
+    expect(testCommandForKind(undefined)).toBe("npm test");
+  });
+
+  it("renders kind-aware deploy commands with env injected for cloudflare_worker", () => {
+    expect(deployCommandFor("cloudflare_worker", "production", "x")).toBe(
+      "wrangler deploy --env production"
+    );
+    expect(deployCommandFor("cloudflare_worker", undefined, "x")).toBe(
+      "wrangler deploy"
+    );
+    expect(deployCommandFor("npm_publish", "production", "x")).toBe(
+      "npm publish --access public"
+    );
+    expect(deployCommandFor("cargo_publish", "production", "x")).toBe(
+      "cargo publish"
+    );
+    expect(deployCommandFor("gh_release", undefined, "v1.2.3")).toBe(
+      "gh release create v1.2.3 --generate-notes"
+    );
+  });
+
+  it("invokeRunner returns ok when no runner is bound (PDX-25 fallback)", async () => {
+    const result = await invokeRunner(undefined, {
+      step: "build",
+      command: "npm run build",
+      secrets: [],
+      deployId: "deploy-1",
+      artifact: "abc"
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("invokeRunner POSTs to the runner binding when bound and surfaces failure", async () => {
+    let captured: DeployRunnerRequest | null = null;
+    const runner: Fetcher = {
+      // Minimal Fetcher mock — Vitest runs in node so we don't need a
+      // full Workers runtime.
+      fetch: async (_input: RequestInfo, init?: RequestInit) => {
+        captured = JSON.parse(init?.body as string) as DeployRunnerRequest;
+        return new Response(JSON.stringify({ ok: false, error: "boom", exit_code: 7 }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    } as unknown as Fetcher;
+    const result = await invokeRunner(runner, {
+      step: "deploy",
+      command: "wrangler deploy --env production",
+      secrets: ["CLOUDFLARE_API_TOKEN"],
+      deployId: "deploy-1",
+      artifact: "abc",
+      kind: "cloudflare_worker",
+      envName: "production"
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/boom|500/);
+    expect(captured).not.toBeNull();
+    expect(captured!.command).toBe("wrangler deploy --env production");
+    expect(captured!.secrets).toEqual(["CLOUDFLARE_API_TOKEN"]);
+  });
+
+  it("invokeRunner parses an ok response from the runner", async () => {
+    const runner: Fetcher = {
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+    } as unknown as Fetcher;
+    const result = await invokeRunner(runner, {
+      step: "test",
+      command: "npm test",
+      secrets: [],
+      deployId: "deploy-1",
+      artifact: "abc"
+    });
+    expect(result.ok).toBe(true);
   });
 });
 

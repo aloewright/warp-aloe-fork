@@ -30,6 +30,7 @@ use tokio::sync::RwLock;
 use auto_healing::{TestDeletionCheck, TestDeletionDecision};
 
 use crate::audit::{AuditEvent, AuditEventKind, AuditLog};
+use crate::deploy_tool::{DeployTool, TOOL_NAME as DEPLOY_TOOL};
 use crate::diff_guard::{DiffGuard, DiffGuardError};
 use crate::linear_graphql::{LinearGraphQlTool, TOOL_NAME as LINEAR_GRAPHQL_TOOL};
 use crate::simulator_tool::SimulatorTool;
@@ -157,6 +158,12 @@ pub struct RunningEntry {
     /// execution path actually fired without round-tripping the result
     /// back into the subprocess.
     pub last_linear_graphql_result: Option<serde_json::Value>,
+    /// PDX-114 [E2]: most recent JSON envelope observed for an in-flight
+    /// `deploy` tool call. Same role as `last_linear_graphql_result`,
+    /// scoped to the deploy tool. Tests use this to assert the daemon
+    /// created a workflow instance on the agent's behalf without the
+    /// agent ever invoking `wrangler deploy` / `gh release` itself.
+    pub last_deploy_tool_result: Option<serde_json::Value>,
 }
 
 /// Pending retry of a failed or stalled run.
@@ -222,6 +229,15 @@ pub struct Orchestrator {
     /// responses cross the daemon boundary.
     #[allow(dead_code)] // wired into agent boundary in a follow-up; see PDX-113.
     simulator_tool: Option<SimulatorTool>,
+    /// PDX-114 [E2] — daemon-mediated `deploy` tool. Optional; production
+    /// wiring installs a [`DeployTool`] whose
+    /// [`crate::deploy_tool::DeployWorkflowClient`] talks to the
+    /// control-plane Worker. The agent never sees the `wrangler` /
+    /// `gh release` / `cargo publish` / `npm publish` invocation
+    /// directly — it only receives `{ workflow_instance_id,
+    /// status: "awaiting_approval" }` and learns to wait for the human
+    /// approval to land via Linear.
+    deploy_tool: Option<DeployTool>,
 }
 
 impl Orchestrator {
@@ -270,6 +286,7 @@ impl Orchestrator {
             test_deletion: TestDeletionCheck::default(),
             linear_graphql_tool: None,
             simulator_tool: None,
+            deploy_tool: None,
         }
     }
 
@@ -298,6 +315,23 @@ impl Orchestrator {
     /// Whether the daemon-mediated `simulator` tool is installed.
     pub fn has_simulator_tool(&self) -> bool {
         self.simulator_tool.is_some()
+    }
+
+    /// Install the daemon-mediated `deploy` tool (PDX-114 [E2]). Mirrors
+    /// [`Self::with_linear_graphql_tool`]: the daemon owns the deploy
+    /// pipeline (workflow instance creation, secrets, approver list)
+    /// and the agent only ever sees a `{ workflow_instance_id,
+    /// status: "awaiting_approval" }` envelope, so no Cloudflare /
+    /// npm / GitHub / Cargo deploy credentials cross the subprocess
+    /// boundary.
+    pub fn with_deploy_tool(mut self, tool: DeployTool) -> Self {
+        self.deploy_tool = Some(tool);
+        self
+    }
+
+    /// Whether the daemon-mediated `deploy` tool is installed.
+    pub fn has_deploy_tool(&self) -> bool {
+        self.deploy_tool.is_some()
     }
 
     /// Snapshot the live workflow definition. Cheap (`Arc::clone` under a
@@ -495,6 +529,7 @@ impl Orchestrator {
                     agent_id: agent_id.clone(),
                     task_handle: None,
                     last_linear_graphql_result: None,
+                    last_deploy_tool_result: None,
                 },
             );
         }
@@ -618,6 +653,35 @@ impl Orchestrator {
                         let mut s = self.state.write().await;
                         if let Some(entry) = s.running.get_mut(&issue.id) {
                             entry.last_linear_graphql_result = Some(result);
+                        }
+                    } else if name == DEPLOY_TOOL {
+                        // PDX-114 [E2]: intercept `deploy` tool calls and
+                        // route them through the daemon-side
+                        // [`DeployTool`], which validates against
+                        // `WORKFLOW.md` and POSTs to the control-plane
+                        // Worker to create a `DeployWorkflow` instance.
+                        // The agent only ever sees the structured
+                        // envelope returned here — never the underlying
+                        // `wrangler` / `gh release` / `cargo publish` /
+                        // `npm publish` invocation.
+                        let result = match &self.deploy_tool {
+                            Some(tool) => tool.execute(&args).await,
+                            None => serde_json::json!({
+                                "error": {
+                                    "kind": "not_configured",
+                                    "message": "deploy tool not configured on daemon",
+                                }
+                            }),
+                        };
+                        self.audit.record(
+                            AuditEvent::new(AuditEventKind::ToolResult)
+                                .with_issue(issue.id.clone(), issue.identifier.clone())
+                                .with_provider(provider.to_string())
+                                .with_message(DEPLOY_TOOL.to_string()),
+                        );
+                        let mut s = self.state.write().await;
+                        if let Some(entry) = s.running.get_mut(&issue.id) {
+                            entry.last_deploy_tool_result = Some(result);
                         }
                     }
                 }

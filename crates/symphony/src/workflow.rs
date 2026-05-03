@@ -44,6 +44,55 @@ pub struct WorkflowConfig {
     /// is started.
     #[serde(default)]
     pub server: ServerConfig,
+    /// PDX-114 [E2]: per-target deploy config. Map of target name (e.g.
+    /// `"helm-control-plane"`) to a [`DeployConfig`] describing the
+    /// deploy kind, environment knobs, secrets refs, and the approver
+    /// allowlist. Empty by default — the `deploy` daemon-mediated tool
+    /// rejects targets that are not declared here.
+    #[serde(default)]
+    pub deploys: HashMap<String, DeployConfig>,
+}
+
+/// PDX-114 [E2]: per-target deploy config block.
+///
+/// Declared in `WORKFLOW.md` front matter under the top-level `deploys:`
+/// key. The `deploy` daemon-mediated tool consults this map at tool-call
+/// time to decide:
+///   * whether the target is allowed at all,
+///   * which approvers may satisfy the gate,
+///   * which environment names are valid for the target,
+///   * which Doppler-fronted secrets to inject when invoking the deploy
+///     step inside the Cloudflare Workflow runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployConfig {
+    /// Deploy kind. Restricted set:
+    ///   * `cloudflare_worker` — invokes `wrangler deploy --env <env>`.
+    ///   * `npm_publish` — invokes `npm publish`.
+    ///   * `cargo_publish` — invokes `cargo publish`.
+    ///   * `gh_release` — invokes `gh release create`.
+    pub kind: String,
+    /// Allowed environment names (e.g. `["staging", "production"]`).
+    /// The `deploy` tool refuses an env not in this list.
+    #[serde(default)]
+    pub environments: Vec<String>,
+    /// Linear identifiers (email or name) authorized to satisfy the
+    /// approval gate via a `+approve` Linear comment. At least one
+    /// approver must be listed; the deploy tool refuses otherwise.
+    #[serde(default)]
+    pub approvers: Vec<String>,
+    /// Doppler-fronted secret references injected when running the
+    /// underlying deploy command. Each entry is the env var name as it
+    /// will appear when the deploy step runs (e.g.
+    /// `"CLOUDFLARE_API_TOKEN"`); the actual value is resolved by the
+    /// agent-runtime container against the Doppler project.
+    #[serde(default)]
+    pub secrets: Vec<String>,
+    /// Optional approval timeout override (Cloudflare Workflows
+    /// `WorkflowTimeoutDuration` string, e.g. `"24 hours"`). Defaults
+    /// are set Workflow-side per [`DEFAULT_APPROVAL_TIMEOUT`] in
+    /// `cloudflare-control-plane/src/workers/workflows/deploy-workflow.ts`.
+    #[serde(default)]
+    pub approval_timeout: Option<String>,
 }
 
 /// Tracker block.
