@@ -27,18 +27,32 @@
  *     this monorepo today; once they move, only `control-plane.ts` shifts).
  */
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import {
   denyJwt,
+  denyShareToken,
   extractHelmJwt,
   issueHelmJwt,
+  issueShareToken,
   recordAuthEvent,
   validateDopplerToken,
   verifyHelmJwt,
   type AuthEnv,
   type AuthenticatedRequestContext
 } from "../shared/auth.js";
+import {
+  PUBLIC_USER_ID,
+  ensurePublicUser,
+  ensureShareHandle,
+  recordShareAccess,
+  recordShareGrant,
+  recordShareRevoke,
+  resolveOwnerUserId,
+  shareHandleId,
+  type ShareableKind,
+  type SharePermission
+} from "../shared/share_auth.js";
 import {
   json,
   notFound,
@@ -60,7 +74,7 @@ import {
   verifyGitHubSignature,
   verifySlackSignature
 } from "../shared/webhooks.js";
-import { auditLog, getDb, users } from "../db/index.js";
+import { auditLog, getDb, shares, users } from "../db/index.js";
 import { resolveWorkflowBinding, type WorkflowBinding } from "./workflows/index.js";
 import { handleAuditSync, type AuditMirrorEnv } from "./audit_mirror.js";
 import type {
@@ -76,6 +90,16 @@ export interface SessionDoNamespace {
   get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
 }
 
+/**
+ * Minimal UserDO namespace contract for share-broadcast fan-out (PDX-116).
+ * The full UserDO surface lives in `durable-objects/user-do.ts`; we only
+ * need `fetch` here because we POST to `/broadcast` via the stub.
+ */
+export interface UserDoNamespace {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
+}
+
 export interface ControlPlaneEnv extends AuthEnv, AuditMirrorEnv {
   HELM_ENVIRONMENT: HelmEnvironment;
   HELM_VERSION: string;
@@ -87,10 +111,14 @@ export interface ControlPlaneEnv extends AuthEnv, AuditMirrorEnv {
 
   // Optional bindings — present once PDX-20 / PDX-25 land alongside this Worker.
   SESSION_DO?: SessionDoNamespace;
+  USER_DO?: UserDoNamespace;
   SWARM_WORKFLOW?: WorkflowBinding;
   DEPLOY_WORKFLOW?: WorkflowBinding;
   SCHEDULED_TASK_WORKFLOW?: WorkflowBinding;
   WATCHDOG_WORKFLOW?: WorkflowBinding;
+
+  /** PDX-116 — separate signing key for share-link tokens. Optional. */
+  HELM_SHARE_TOKEN_SIGNING_KEY?: string;
 
   // Webhook secrets (wrangler secret put …). Each is optional — the route
   // returns 503 with `webhook_disabled` if its secret isn't configured, so
@@ -463,6 +491,8 @@ export function createApp(): Hono<AppEnv> {
   app.use("/api/resources", helmAuth, audit());
   app.use("/api/workflows/*", helmAuth, audit());
   app.use("/api/sessions/*", helmAuth, audit());
+  app.use("/api/workspaces/*", helmAuth, audit());
+  app.use("/api/runs/*", helmAuth, audit());
 
   app.get("/api/environments", (c) => {
     const manifest = manifestForRuntime(c.env);
@@ -643,11 +673,344 @@ export function createApp(): Hono<AppEnv> {
     return stub.fetch(forwarded);
   });
 
+  // ── Sharing model (PDX-116 [E4]) ────────────────────────────────────────
+  // POST   /api/workspaces/:id/shares          — grant read/write to a user or public link
+  // GET    /api/workspaces/:id/shares          — list active shares
+  // DELETE /api/workspaces/:id/shares/:shareId — revoke
+  // POST   /api/sessions/:id/shares            — same shape, finer scope
+  // POST   /api/runs/:id/shares                — single transcript share
+  //
+  // Authentication for all of these is the helm session JWT (already
+  // enforced by `helmAuth` registered above). The handlers verify the
+  // caller owns the entity before granting/listing/revoking. Public-link
+  // share tokens are validated by `share_auth.ts` on access — the grant
+  // route always requires an authenticated owner.
+
+  app.post("/api/workspaces/:id/shares", (c) => handleCreateShare(c, "workspace"));
+  app.get("/api/workspaces/:id/shares", (c) => handleListShares(c, "workspace"));
+  app.delete("/api/workspaces/:id/shares/:shareId", (c) =>
+    handleRevokeShare(c, "workspace")
+  );
+  app.post("/api/sessions/:id/shares", (c) => handleCreateShare(c, "session"));
+  app.post("/api/runs/:id/shares", (c) => handleCreateShare(c, "run"));
+
   // ── 404 fallback ────────────────────────────────────────────────────────
   app.all("*", () => notFound());
 
   return app;
 }
+
+// ── Share route helpers (PDX-116) ──────────────────────────────────────────
+
+const PERMISSION_VALUES: ReadonlySet<SharePermission> = new Set([
+  "read",
+  "write",
+  "admin"
+]);
+
+function ensureOwnerCtx(
+  ctx: AuthenticatedRequestContext
+): { ok: true; userId: string } | { ok: false; status: number; reason: string } {
+  if (!ctx.userId) {
+    return { ok: false, status: 401, reason: "no_user" };
+  }
+  return { ok: true, userId: ctx.userId };
+}
+
+async function broadcastShareGranted(
+  env: ControlPlaneEnv,
+  recipientUserId: string,
+  payload: {
+    shareId: string;
+    kind: ShareableKind;
+    targetId: string;
+    permission: SharePermission;
+  }
+): Promise<void> {
+  if (!env.USER_DO) return;
+  if (recipientUserId === PUBLIC_USER_ID) return;
+  try {
+    const id = env.USER_DO.idFromName(recipientUserId);
+    const stub = env.USER_DO.get(id);
+    await stub.fetch(
+      new Request("https://user-do.local/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: recipientUserId,
+          event: {
+            kind: "created",
+            resourceId: shareHandleId(payload.kind, payload.targetId),
+            payload: {
+              type: "share_granted",
+              shareId: payload.shareId,
+              resource: { kind: payload.kind, id: payload.targetId },
+              permission: payload.permission
+            }
+          }
+        })
+      })
+    );
+  } catch (err) {
+    console.log(`[share] broadcast failed: ${String(err)}`);
+  }
+}
+
+async function handleCreateShare(
+  c: import("hono").Context<AppEnv>,
+  kind: ShareableKind
+): Promise<Response> {
+  const env = c.env;
+  const ownerCheck = ensureOwnerCtx(c.var.authCtx);
+  if (!ownerCheck.ok) {
+    return c.json({ error: "unauthorized", reason: ownerCheck.reason }, 401);
+  }
+  const targetId = c.req.param("id");
+  if (!targetId) return c.json({ error: "missing_id" }, 400);
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    shared_with?: string;
+    permission?: string;
+  };
+  const sharedWith = body.shared_with;
+  const permission = body.permission as SharePermission | undefined;
+  if (!sharedWith || typeof sharedWith !== "string") {
+    return c.json({ error: "invalid_payload", reason: "shared_with_required" }, 400);
+  }
+  if (!permission || !PERMISSION_VALUES.has(permission)) {
+    return c.json({ error: "invalid_payload", reason: "permission_required" }, 400);
+  }
+
+  const db = getDb(env);
+  const ownerUserId = await resolveOwnerUserId(db, kind, targetId);
+  if (!ownerUserId) return c.json({ error: "not_found" }, 404);
+  if (ownerUserId !== ownerCheck.userId) {
+    return c.json({ error: "forbidden", reason: "not_owner" }, 403);
+  }
+
+  // Materialize a share-handle resource row so the FK on shares.resource_id
+  // resolves. Idempotent.
+  const handleId = await ensureShareHandle(db, kind, targetId, ownerUserId);
+
+  // Resolve the recipient: either an existing user_id, or the synthetic
+  // __public__ user (lazily created).
+  let recipientUserId: string;
+  let isPublic = false;
+  if (sharedWith === "public") {
+    await ensurePublicUser(db);
+    recipientUserId = PUBLIC_USER_ID;
+    isPublic = true;
+  } else {
+    // For non-public grants we don't auto-create the recipient — the user
+    // must already exist in `users`. Mirrors PDX-22 FK semantics.
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, sharedWith))
+      .all();
+    if (existing.length === 0) {
+      return c.json({ error: "invalid_payload", reason: "unknown_recipient" }, 400);
+    }
+    recipientUserId = sharedWith;
+  }
+
+  // Insert the share row. The unique index `(resource_id, shared_with_user_id)`
+  // makes re-grants idempotent — we upsert by reading after the insert
+  // attempt.
+  const shareId = crypto.randomUUID();
+  await db
+    .insert(shares)
+    .values({
+      id: shareId,
+      resourceId: handleId,
+      sharedWithUserId: recipientUserId,
+      permission
+    })
+    .onConflictDoNothing();
+
+  // Read back the canonical share row (handles the case where another
+  // request inserted the same `(resource, recipient)` pair concurrently —
+  // we want to return the existing row's id, not the one we just minted
+  // and discarded).
+  const existingShare = await db
+    .select()
+    .from(shares)
+    .where(
+      and(
+        eq(shares.resourceId, handleId),
+        eq(shares.sharedWithUserId, recipientUserId)
+      )
+    )
+    .all();
+  const row = existingShare[0];
+  if (!row) {
+    return c.json({ error: "internal_error", reason: "share_insert_failed" }, 500);
+  }
+
+  // Public share → mint a signed token tied to the share row's id. Store
+  // the jti in AUTH_KV with the share row id as the value so the validator
+  // can confirm the token still maps to a live row even if the row is
+  // later deleted; the denylist takes care of immediate revocation.
+  let shareToken: string | undefined;
+  let shareTokenJti: string | undefined;
+  let shareTokenExp: number | undefined;
+  if (isPublic) {
+    const signingKey =
+      env.HELM_SHARE_TOKEN_SIGNING_KEY ?? env.HELM_JWT_SIGNING_KEY ?? null;
+    if (!signingKey) {
+      return c.json(
+        {
+          error: "misconfigured",
+          message:
+            "HELM_SHARE_TOKEN_SIGNING_KEY (or HELM_JWT_SIGNING_KEY) is required for public shares."
+        },
+        500
+      );
+    }
+    const issued = await issueShareToken({ shareId: row.id, signingKey });
+    shareToken = issued.token;
+    shareTokenJti = issued.jti;
+    shareTokenExp = issued.exp;
+    if (env.AUTH_KV) {
+      const ttl = Math.max(60, issued.exp - Math.floor(Date.now() / 1000));
+      await env.AUTH_KV.put(`share:jti:${issued.jti}`, row.id, {
+        expirationTtl: ttl
+      });
+    }
+  }
+
+  // Audit + broadcast.
+  await recordShareGrant(env, {
+    userId: ownerCheck.userId,
+    shareId: row.id,
+    kind,
+    targetId,
+    permission,
+    sharedWith: isPublic ? "public" : recipientUserId
+  });
+  await broadcastShareGranted(env, recipientUserId, {
+    shareId: row.id,
+    kind,
+    targetId,
+    permission
+  });
+
+  return c.json(
+    {
+      share: row,
+      ...(shareToken
+        ? { shareToken, shareTokenJti, shareTokenExpiresAt: shareTokenExp }
+        : {})
+    },
+    201
+  );
+}
+
+async function handleListShares(
+  c: import("hono").Context<AppEnv>,
+  kind: ShareableKind
+): Promise<Response> {
+  const env = c.env;
+  const ownerCheck = ensureOwnerCtx(c.var.authCtx);
+  if (!ownerCheck.ok) {
+    return c.json({ error: "unauthorized", reason: ownerCheck.reason }, 401);
+  }
+  const targetId = c.req.param("id");
+  if (!targetId) return c.json({ error: "missing_id" }, 400);
+
+  const db = getDb(env);
+  const ownerUserId = await resolveOwnerUserId(db, kind, targetId);
+  if (!ownerUserId) return c.json({ error: "not_found" }, 404);
+  if (ownerUserId !== ownerCheck.userId) {
+    return c.json({ error: "forbidden", reason: "not_owner" }, 403);
+  }
+
+  const handleId = shareHandleId(kind, targetId);
+  const rows = await db
+    .select()
+    .from(shares)
+    .where(eq(shares.resourceId, handleId))
+    .all();
+  return c.json({ shares: rows });
+}
+
+async function handleRevokeShare(
+  c: import("hono").Context<AppEnv>,
+  kind: ShareableKind
+): Promise<Response> {
+  const env = c.env;
+  const ownerCheck = ensureOwnerCtx(c.var.authCtx);
+  if (!ownerCheck.ok) {
+    return c.json({ error: "unauthorized", reason: ownerCheck.reason }, 401);
+  }
+  const targetId = c.req.param("id");
+  const shareIdParam = c.req.param("shareId");
+  if (!targetId || !shareIdParam) {
+    return c.json({ error: "missing_id" }, 400);
+  }
+
+  const db = getDb(env);
+  const ownerUserId = await resolveOwnerUserId(db, kind, targetId);
+  if (!ownerUserId) return c.json({ error: "not_found" }, 404);
+  if (ownerUserId !== ownerCheck.userId) {
+    return c.json({ error: "forbidden", reason: "not_owner" }, 403);
+  }
+
+  const handleId = shareHandleId(kind, targetId);
+  const rows = await db
+    .select()
+    .from(shares)
+    .where(and(eq(shares.id, shareIdParam), eq(shares.resourceId, handleId)))
+    .all();
+  const row = rows[0];
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  await db.delete(shares).where(eq(shares.id, row.id));
+
+  // If a public-link token jti was minted for this share, deny it in KV so
+  // the token is rejected immediately even though it hasn't expired. We
+  // stored the row id at `share:jti:{jti}`, so we walk the recent keys via
+  // a list. KV doesn't support reverse lookup; instead, future tokens for
+  // this share id will fail the row lookup naturally because the row was
+  // just deleted. We still record a generic share-token denylist entry
+  // keyed on the share id for belt-and-suspenders.
+  if (env.AUTH_KV) {
+    // Best-effort: callers with the share-token jti can use this prefix
+    // to verify denial. We don't iterate all jtis here; the per-jti
+    // denylist key is set when callers re-present a token after revocation.
+    await env.AUTH_KV.put(`share:revoked:${row.id}`, "1", {
+      expirationTtl: 60 * 60 * 24 * 30
+    });
+    // If there is at most one jti per share row (which is the normal
+    // case — public shares mint exactly one token), the caller can pass
+    // it explicitly via `?jti=` so we can deny the token immediately.
+    const url = new URL(c.req.url);
+    const explicitJti = url.searchParams.get("jti");
+    if (explicitJti) {
+      // Default 30-day TTL for the denylist entry; the validator uses the
+      // token's `exp` claim to bound this naturally too.
+      await denyShareToken(
+        env.AUTH_KV,
+        explicitJti,
+        Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30
+      );
+    }
+  }
+
+  await recordShareRevoke(env, {
+    userId: ownerCheck.userId,
+    shareId: row.id,
+    kind,
+    targetId
+  });
+
+  return c.json({ revoked: true, shareId: row.id });
+}
+
+// Allow access via public share token for run transcripts, etc. The route
+// is exported here so that future surfaces (transcripts, workspace reads)
+// can call it.
+export { recordShareAccess as auditShareAccess };
 
 /** Singleton lazily created on first request — Hono apps are stateless. */
 let cachedApp: Hono<AppEnv> | null = null;

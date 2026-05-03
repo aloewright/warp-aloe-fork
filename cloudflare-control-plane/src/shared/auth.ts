@@ -47,8 +47,15 @@ export const JWKS_CACHE_TTL_SECONDS = 24 * 60 * 60;
 /** KV key prefixes. */
 export const KV_KEY = {
   jwks: (teamDomain: string) => `jwks:${teamDomain}`,
-  denylist: (jti: string) => `denylist:jti:${jti}`
+  denylist: (jti: string) => `denylist:jti:${jti}`,
+  /** PDX-116 — public share-link tokens. Stored value: the share row id. */
+  shareToken: (jti: string) => `share:jti:${jti}`,
+  /** PDX-116 — denied share-token jtis (revoked-before-expiry). */
+  shareDenylist: (jti: string) => `share:denied:${jti}`
 } as const;
+
+/** PDX-116 default share-link lifetime: 30 days. */
+export const SHARE_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 // ── Env shape ───────────────────────────────────────────────────────────────
 
@@ -358,8 +365,12 @@ export async function validateDopplerToken(
 export interface AuthenticatedRequestContext {
   userId: string | null;
   jti?: string;
-  /** "access" (Cloudflare Access JWT), "helm" (helm session JWT), "doppler" (fallback). */
-  source: "access" | "helm" | "doppler" | "anonymous";
+  /**
+   * "access" (Cloudflare Access JWT), "helm" (helm session JWT), "doppler"
+   * (fallback), "share" (public-link share token from PDX-116), or
+   * "anonymous" for unattributed traffic.
+   */
+  source: "access" | "helm" | "doppler" | "share" | "anonymous";
   scope?: string;
 }
 
@@ -543,4 +554,170 @@ export async function requireHelmAuth<E extends AuthEnv>(
       { status: 401 }
     )
   };
+}
+
+// ── Public share-link tokens (PDX-116) ──────────────────────────────────────
+//
+// A separate signed-token surface for public share links. We deliberately
+// don't reshape the helm JWT format — share tokens are HS256 with a distinct
+// `typ` claim (`"share-jwt"`) so a leaked share token cannot be presented in
+// the `Authorization: Bearer …` slot to authenticate a user. Revocation goes
+// through the same `AUTH_KV` binding the helm denylist uses, but with its
+// own `share:denied:{jti}` key prefix so the two surfaces stay independent.
+//
+// Share tokens are written to `?share_token=…` query string by clients; the
+// route layer (`src/shared/share_auth.ts`) reads that, validates here, and
+// produces a synthetic `AuthenticatedRequestContext { source: "share" }`.
+
+interface ShareJwtHeader {
+  alg: "HS256";
+  typ: "share-jwt";
+}
+
+interface ShareJwtPayload {
+  /** Share row id this token grants access to. */
+  shareId: string;
+  /** issued-at, seconds since epoch. */
+  iat: number;
+  /** expiry, seconds since epoch. */
+  exp: number;
+  /** unique JWT id (uuid v4) — denylist key. */
+  jti: string;
+}
+
+export interface IssueShareTokenOptions {
+  shareId: string;
+  signingKey: string;
+  ttlSeconds?: number;
+  /** Override the clock — used in tests. Seconds since epoch. */
+  now?: number;
+  /** Override the jti — used in tests. */
+  jti?: string;
+}
+
+export interface IssuedShareToken {
+  token: string;
+  shareId: string;
+  jti: string;
+  /** Expiry, seconds since epoch. */
+  exp: number;
+}
+
+/**
+ * Sign and return an HS256 share-link token. The jti is unique per token; the
+ * caller is expected to record it on the share row (or in `AUTH_KV` keyed on
+ * `share:jti:{jti}`) so revocation can later deny it without consulting the
+ * D1 row.
+ */
+export async function issueShareToken(
+  opts: IssueShareTokenOptions
+): Promise<IssuedShareToken> {
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  const ttl = opts.ttlSeconds ?? SHARE_TOKEN_TTL_SECONDS;
+  const payload: ShareJwtPayload = {
+    shareId: opts.shareId,
+    iat: now,
+    exp: now + ttl,
+    jti: opts.jti ?? crypto.randomUUID()
+  };
+  const header: ShareJwtHeader = { alg: "HS256", typ: "share-jwt" };
+  const head = base64UrlEncodeJson(header);
+  const body = base64UrlEncodeJson(payload);
+  const signingInput = `${head}.${body}`;
+  const key = await importHs256Key(opts.signingKey);
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(signingInput)
+  );
+  const sigEncoded = base64UrlEncode(new Uint8Array(sig));
+  return {
+    token: `${signingInput}.${sigEncoded}`,
+    shareId: payload.shareId,
+    jti: payload.jti,
+    exp: payload.exp
+  };
+}
+
+export type ShareTokenVerifyResult =
+  | { ok: true; shareId: string; jti: string; exp: number }
+  | {
+      ok: false;
+      reason: "malformed" | "bad_signature" | "expired" | "denylisted";
+    };
+
+export interface VerifyShareTokenOptions {
+  signingKey: string;
+  /** Optional KV namespace for the denylist. Without one, denylist is skipped. */
+  authKv?: KVNamespace;
+  /** Override the clock — used in tests. */
+  now?: number;
+}
+
+/**
+ * Verify a share-link token. Mirrors {@link verifyHelmJwt} but rejects any
+ * payload whose header `typ` is not `share-jwt` — this is what stops a
+ * leaked share token from being presented as a helm session JWT.
+ */
+export async function validateShareToken(
+  token: string,
+  opts: VerifyShareTokenOptions
+): Promise<ShareTokenVerifyResult> {
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "malformed" };
+  const [headerPart, payloadPart, signaturePart] = parts as [string, string, string];
+
+  let header: ShareJwtHeader;
+  let payload: ShareJwtPayload;
+  try {
+    header = decodeJson<ShareJwtHeader>(headerPart);
+    payload = decodeJson<ShareJwtPayload>(payloadPart);
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+
+  if (header.alg !== "HS256" || header.typ !== "share-jwt") {
+    return { ok: false, reason: "malformed" };
+  }
+  if (
+    typeof payload.shareId !== "string" ||
+    typeof payload.exp !== "number" ||
+    typeof payload.jti !== "string"
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+
+  const key = await importHs256Key(opts.signingKey);
+  const valid = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    base64UrlDecode(signaturePart),
+    new TextEncoder().encode(`${headerPart}.${payloadPart}`)
+  );
+  if (!valid) return { ok: false, reason: "bad_signature" };
+
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  if (payload.exp <= now) return { ok: false, reason: "expired" };
+
+  if (opts.authKv) {
+    const denied = await opts.authKv.get(KV_KEY.shareDenylist(payload.jti));
+    if (denied) return { ok: false, reason: "denylisted" };
+  }
+
+  return { ok: true, shareId: payload.shareId, jti: payload.jti, exp: payload.exp };
+}
+
+/**
+ * Add a share-token jti to the KV denylist so the token is rejected before
+ * its natural expiry. TTL is set to the token's remaining lifetime so the
+ * entry self-evicts. KV minimum TTL is 60s; we clamp accordingly.
+ */
+export async function denyShareToken(
+  authKv: KVNamespace,
+  jti: string,
+  exp: number,
+  now: number = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  const remaining = Math.max(60, exp - now);
+  await authKv.put(KV_KEY.shareDenylist(jti), "1", { expirationTtl: remaining });
 }
