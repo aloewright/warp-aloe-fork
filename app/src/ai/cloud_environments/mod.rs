@@ -227,6 +227,9 @@ pub fn owner_for_new_personal_environment(ctx: &AppContext) -> Option<Owner> {
     Some(Owner::User { user_uid: user_id })
 }
 
+#[cfg(not(target_family = "wasm"))]
+pub mod helm_routing;
+
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;

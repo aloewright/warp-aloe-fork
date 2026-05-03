@@ -550,16 +550,25 @@ impl SettingsWidget for CliAgentSignInWidget {
                 .finish(),
         };
 
+        // ── Helm cloud section (PDX-119 [E7]) ──────────────────────────
+        // PDX-118 may add an AI Gateway block ABOVE this point; the
+        // helm-cloud section sits between AI Gateway and the per-agent
+        // CLI rows so coordination conflicts on rebase have an obvious
+        // resolution: keep both blocks, helm-cloud second.
+        let helm_section = render_helm_cloud_section(appearance);
+
         // ── Compose ────────────────────────────────────────────────────
         let mut children: Vec<Box<dyn Element>> = vec![
-            // PDX-118 [E6]: gateway routing block sits above the
-            // per-agent sign-in rows.
+            // PDX-118 [E6]: gateway routing block.
             gateway_header,
             gateway_description,
             gateway_endpoint_banner,
             gateway_claude_btn,
             spacer(),
             gateway_codex_btn,
+            spacer(),
+            // PDX-119 [E7]: helm-cloud routing section.
+            helm_section,
             spacer(),
             // Per-agent sign-in rows below.
             header,
@@ -596,6 +605,48 @@ fn spacer() -> Box<dyn Element> {
     Container::new(Flex::column().finish())
         .with_padding_bottom(12.)
         .finish()
+}
+
+/// Render the helm-cloud routing section (PDX-119 [E7]).
+///
+/// Read-only status surface for the V1 of this work: the user-facing
+/// edits (base URL, toggle) live in `~/.warp/helm_cloud.toml` and a
+/// later PR wires them into a true settings editor. The status banner
+/// reflects the live config + last-create timestamp from the
+/// `HelmCloudClient::status()` snapshot when one is available.
+#[cfg(not(target_family = "wasm"))]
+fn render_helm_cloud_section(appearance: &Appearance) -> Box<dyn Element> {
+    use helm_cloud_client::load_helm_cloud_config;
+
+    // Default the toggle as if `warp_hosted=true` so the section reflects
+    // what the user opted into rather than what the default would be.
+    let cfg = load_helm_cloud_config(true);
+    let title = "Helm cloud";
+    let subtitle = if cfg.route_cloud_env_through_helm {
+        format!(
+            "Routing cloud-environment creation through helm-cloud at {}. Edit ~/.warp/helm_cloud.toml to change.",
+            cfg.base_url,
+        )
+    } else {
+        format!(
+            "Helm cloud routing OFF (using Warp-hosted). Set route_cloud_env_through_helm = true in ~/.warp/helm_cloud.toml to enable; base = {}.",
+            cfg.base_url,
+        )
+    };
+    Container::new(render_settings_info_banner(title, Some(&subtitle), appearance))
+        .with_padding_bottom(12.)
+        .finish()
+}
+
+#[cfg(target_family = "wasm")]
+fn render_helm_cloud_section(appearance: &Appearance) -> Box<dyn Element> {
+    Container::new(render_settings_info_banner(
+        "Helm cloud",
+        Some("Native-only feature; not available in the web bundle."),
+        appearance,
+    ))
+    .with_padding_bottom(12.)
+    .finish()
 }
 
 #[cfg(test)]

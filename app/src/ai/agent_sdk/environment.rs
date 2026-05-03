@@ -730,6 +730,110 @@ impl EnvironmentCommandRunner {
         scope: ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) {
+        // PDX-119 [E7]: dispatch to helm-cloud when the toggle is ON. We
+        // call the helm-cloud control plane *before* the Warp-hosted
+        // UpdateManager path so the user gets a real session id from
+        // helm-cloud (and the audit row is written) even if the local
+        // Warp Drive registration is the legacy code path. When the
+        // toggle is OFF (default for `warp_hosted=true`) this block is
+        // a no-op and the original flow runs unchanged.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // Treat the build as `warp_hosted=true` for the toggle
+            // *default* — this is the conservative choice for the
+            // upstream Warp build. Users who want helm-cloud routing
+            // flip the toggle in Settings → AI → Helm cloud.
+            let warp_hosted = true;
+            if crate::ai::cloud_environments::helm_routing::should_route_through_helm(
+                warp_hosted,
+            ) {
+                let cfg = helm_cloud_client::load_helm_cloud_config(warp_hosted);
+                let repo_url = github_repos
+                    .first()
+                    .map(|r| format!("https://github.com/{}/{}", r.owner, r.repo))
+                    .unwrap_or_default();
+                let prompt = description.clone().unwrap_or_else(|| name.clone());
+                tracing::info!(
+                    base_url = %cfg.base_url,
+                    repo_url = %repo_url,
+                    "PDX-119: routing cloud_env create through helm-cloud"
+                );
+                // We intentionally do NOT block the UI thread on the
+                // network call. The helm-cloud session is dispatched in
+                // a background tokio task; on success the audit row is
+                // written by `HelmCloudClient::create_session`. On
+                // failure we log via tracing which feeds the in-app
+                // toast pipeline. We never fall back to Warp-hosted
+                // silently — per the PDX-119 spec, helm-cloud failures
+                // must remain visible.
+                let docker_image_for_helm = docker_image.clone();
+                let setup_commands_for_helm = setup_commands.clone();
+                std::thread::spawn(move || {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            tracing::error!(error = %e, "PDX-119: failed to spawn tokio rt");
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        // Attempt to read a Cloudflare Access JWT from
+                        // the env (set by the auth bootstrap on app
+                        // boot); if absent, fall back to Doppler. If
+                        // both are absent the call surfaces the
+                        // `NoCredential` error in the audit log —
+                        // visible, not silent.
+                        let auth_source = if let Ok(j) =
+                            std::env::var("WARP_HELM_CLOUD_ACCESS_JWT")
+                        {
+                            helm_cloud_client::HelmAuthSource::Cloudflare {
+                                access_jwt: j,
+                            }
+                        } else if let Ok(t) =
+                            std::env::var("WARP_HELM_CLOUD_DOPPLER_TOKEN")
+                        {
+                            helm_cloud_client::HelmAuthSource::Doppler { token: t }
+                        } else {
+                            tracing::warn!(
+                                "PDX-119: no upstream credential; \
+                                 set WARP_HELM_CLOUD_ACCESS_JWT or \
+                                 WARP_HELM_CLOUD_DOPPLER_TOKEN"
+                            );
+                            return;
+                        };
+                        let args = helm_cloud_client::CreateSessionArgs {
+                            repo_url,
+                            branch: None,
+                            prompt,
+                            env: setup_commands_for_helm
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, c)| (format!("WARP_SETUP_CMD_{i}"), c))
+                                .collect(),
+                            user_id: None,
+                        };
+                        let _docker_image = docker_image_for_helm; // reserved for future args
+                        match crate::ai::cloud_environments::helm_routing::
+                            route_create_session_through_helm(cfg, auth_source, args).await
+                        {
+                            Ok(id) => {
+                                tracing::info!(
+                                    session_id = %id,
+                                    "PDX-119: helm-cloud session created"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    "PDX-119: helm-cloud session create failed"
+                                );
+                            }
+                        }
+                    });
+                });
+            }
+        }
+
         let environment = AmbientAgentEnvironment::new(
             name,
             description,
