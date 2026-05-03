@@ -29,6 +29,7 @@ default-members = [
   "crates/cron_scheduler",
   "crates/github_webhook_receiver",
   "crates/sum_tree",
+  "crates/simulator_hooks",
   "crates/soak_harness",
   "crates/symphony",
   "crates/warpui",
@@ -91,6 +92,7 @@ template_hooks = { path = "crates/template_hooks" }
 templates = { path = "crates/templates" }
 string-offset = { path = "crates/string-offset" }
 sum_tree = { path = "crates/sum_tree" }
+simulator_hooks = { path = "crates/simulator_hooks" }
 symphony = { path = "crates/symphony" }
 syntax_tree = { path = "crates/syntax_tree" }
 ui_components = { path = "crates/ui_components" }

@@ -32,6 +32,7 @@ use auto_healing::{TestDeletionCheck, TestDeletionDecision};
 use crate::audit::{AuditEvent, AuditEventKind, AuditLog};
 use crate::diff_guard::{DiffGuard, DiffGuardError};
 use crate::linear_graphql::{LinearGraphQlTool, TOOL_NAME as LINEAR_GRAPHQL_TOOL};
+use crate::simulator_tool::SimulatorTool;
 use crate::numstat::collect_workspace_diffs;
 use crate::reload::WorkflowHandle;
 use crate::tracker::{Issue, TrackerError};
@@ -213,6 +214,14 @@ pub struct Orchestrator {
     /// always installs the tool wrapping the same `LinearClient` used for
     /// candidate fetching, comment posting, and state transitions.
     linear_graphql_tool: Option<LinearGraphQlTool>,
+    /// PDX-113 — daemon-mediated `simulator` tool. Optional; macOS hosts
+    /// install a real [`XcrunSimulatorExecutor`]-backed tool, other hosts
+    /// either omit the tool entirely or install one whose dispatch always
+    /// returns `unsupported_platform`. The agent never sees `xcrun` or
+    /// any iOS / macOS credentials directly — only structured JSON
+    /// responses cross the daemon boundary.
+    #[allow(dead_code)] // wired into agent boundary in a follow-up; see PDX-113.
+    simulator_tool: Option<SimulatorTool>,
 }
 
 impl Orchestrator {
@@ -260,6 +269,7 @@ impl Orchestrator {
             diff_guard: DiffGuard::new(max_diff),
             test_deletion: TestDeletionCheck::default(),
             linear_graphql_tool: None,
+            simulator_tool: None,
         }
     }
 
@@ -274,6 +284,20 @@ impl Orchestrator {
     /// Whether the daemon-mediated `linear_graphql` tool is installed.
     pub fn has_linear_graphql_tool(&self) -> bool {
         self.linear_graphql_tool.is_some()
+    }
+
+    /// Install the daemon-mediated `simulator` tool (PDX-113). Mirrors
+    /// [`Self::with_linear_graphql_tool`]: the daemon owns the executor
+    /// and the agent only ever sees JSON responses, so no `xcrun` /
+    /// simulator credentials cross the subprocess boundary.
+    pub fn with_simulator_tool(mut self, tool: SimulatorTool) -> Self {
+        self.simulator_tool = Some(tool);
+        self
+    }
+
+    /// Whether the daemon-mediated `simulator` tool is installed.
+    pub fn has_simulator_tool(&self) -> bool {
+        self.simulator_tool.is_some()
     }
 
     /// Snapshot the live workflow definition. Cheap (`Arc::clone` under a
