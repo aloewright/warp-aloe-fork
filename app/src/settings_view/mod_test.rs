@@ -192,7 +192,7 @@ fn subpage_display_names_are_correct() {
     );
     assert_eq!(
         SettingsSection::OzCloudAPIKeys.to_string(),
-        "Oz Cloud API Keys"
+        "Cloud Agent API Keys"
     );
 }
 

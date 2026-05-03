@@ -6119,12 +6119,17 @@ impl Workspace {
             }
         }
 
-        // 3. Cloud Oz (if flags enabled)
+        // 3. Cloud agent (if flags enabled)
+        // PDX-120 [E8]: this entry routes through `AddAmbientAgentTab`,
+        // which calls Warp's hosted billing API. The Helm client uses
+        // helm-cloud Workers (PDX-19/PDX-119) for cloud envs instead, so
+        // hide this menu item from the default Helm build.
+        #[cfg(feature = "warp_hosted")]
         if is_any_ai_enabled
             && FeatureFlag::AgentView.is_enabled()
             && FeatureFlag::CloudMode.is_enabled()
         {
-            let mut cloud_item = MenuItemFields::new("Cloud Oz")
+            let mut cloud_item = MenuItemFields::new("Cloud agent")
                 .with_on_select_action(WorkspaceAction::AddAmbientAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
             if effective_default == DefaultSessionMode::CloudAgent {
