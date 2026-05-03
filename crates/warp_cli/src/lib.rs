@@ -16,6 +16,7 @@ mod process_handle;
 pub mod artifact;
 pub mod scope;
 pub mod skill;
+pub mod skills;
 
 pub mod agent;
 pub mod completions;
@@ -556,6 +557,15 @@ pub enum CliCommand {
     /// As a shorthand, `warp new <template>` maps to `warp new scaffold <template>`.
     /// Run `warp new list` to see available templates.
     New(crate::new::NewCommand),
+
+    /// Discover, install, update, and contribute community skills.
+    ///
+    /// Skills are sourced from `aloewright/helm-skills` and installed into
+    /// `~/.warp/skills/<name>` so the agent runner picks them up automatically.
+    /// Search uses Cloudflare AI Gateway embeddings (`dynamic/ai_embed`) per
+    /// the AI Gateway routing rule — no provider SDK is ever called directly.
+    #[command(subcommand)]
+    Skills(crate::skills::SkillsCommand),
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.

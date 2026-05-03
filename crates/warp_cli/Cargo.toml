@@ -19,6 +19,12 @@ color-print = "0.3"
 warp_util = { path = "../warp_util" }
 clap_complete = "4.5.58"
 anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# `skills` CLI surface (PDX-117) needs HTTP for AI Gateway embeddings.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+reqwest = { workspace = true, features = ["blocking", "json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -35,3 +41,4 @@ api_key_authentication = []
 
 [dev-dependencies]
 serial_test = "0.8.0"
+tempfile = { workspace = true }

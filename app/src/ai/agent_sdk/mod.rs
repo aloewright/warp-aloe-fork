@@ -37,6 +37,7 @@ use warp_cli::{
     schedule::ScheduleSubcommand,
     secret::SecretCommand,
     share::ShareRequest,
+    skills::SkillsCommand,
     task::{MessageCommand, TaskCommand},
     CliCommand, GlobalOptions,
 };
@@ -100,6 +101,7 @@ mod provider;
 pub(crate) mod retry;
 mod schedule;
 mod secret;
+mod skills_marketplace;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
@@ -201,6 +203,7 @@ fn dispatch_command(
         CliCommand::New(_) => Err(anyhow::anyhow!(
             "`warp new` is not yet wired into the in-app dispatcher; run via the `warp_cli` binary"
         )),
+        CliCommand::Skills(skills_cmd) => skills_marketplace::run(global_options, skills_cmd),
     }
 }
 
@@ -1292,6 +1295,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
         CliCommand::New(_) => false,
+        CliCommand::Skills(_) => false,
     }
 }
 
@@ -1514,6 +1518,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             ArtifactCommand::Download(_) => CliTelemetryEvent::ArtifactDownload,
         },
         CliCommand::New(_) => CliTelemetryEvent::New,
+        CliCommand::Skills(skills_cmd) => CliTelemetryEvent::Skills {
+            subcommand: warp_cli::skills::telemetry_label(skills_cmd),
+        },
     }
 }
 

@@ -114,6 +114,8 @@ pub(super) enum CliTelemetryEvent {
     HarnessSupportNotifyUser,
     /// Executing `warp harness-support finish-task`
     HarnessSupportFinishTask { success: bool },
+    /// Executing `warp skills <subcommand>` (community skills marketplace).
+    Skills { subcommand: &'static str },
 }
 
 impl TelemetryEvent for CliTelemetryEvent {
@@ -190,6 +192,9 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::HarnessSupportNotifyUser => None,
             CliTelemetryEvent::HarnessSupportFinishTask { success } => {
                 Some(json!({ "success": success }))
+            }
+            CliTelemetryEvent::Skills { subcommand } => {
+                Some(json!({ "subcommand": subcommand }))
             }
         }
     }
@@ -278,6 +283,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
                 "CLI.Execute.HarnessSupport.FinishTask"
             }
             CliTelemetryEventDiscriminants::New => "CLI.Execute.New",
+            CliTelemetryEventDiscriminants::Skills => "CLI.Execute.Skills",
         }
     }
 
@@ -402,6 +408,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::New => {
                 "Scaffolded a new project from a Helm template via the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::Skills => {
+                "Ran a `warp skills` community-marketplace command"
             }
         }
     }

@@ -226,6 +226,136 @@ async fn walkdir_finds_skills_in_subdirectories() {
 }
 
 #[tokio::test]
+async fn loads_required_tools_from_front_matter() {
+    let tmp = TempDir::new().unwrap();
+    write_skill(
+        tmp.path(),
+        "ship.md",
+        "---\n\
+name: ship\n\
+description: Ship a Worker.\n\
+required_tools: [wrangler_deploy, doppler_secret_fetch]\n\
+---\n\
+body\n",
+    );
+
+    let registry = SkillRegistry::load(LoaderConfig {
+        user_root: Some(tmp.path().to_path_buf()),
+        repo_root: None,
+    })
+    .await
+    .expect("load");
+
+    let skill = registry.get("ship").expect("found");
+    assert_eq!(
+        skill.required_tools,
+        vec![
+            "wrangler_deploy".to_string(),
+            "doppler_secret_fetch".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn legacy_tools_alias_is_accepted_for_required_tools() {
+    let tmp = TempDir::new().unwrap();
+    write_skill(
+        tmp.path(),
+        "legacy.md",
+        "---\n\
+name: legacy\n\
+description: Legacy alias.\n\
+tools: [foo, bar]\n\
+---\n\
+body\n",
+    );
+
+    let registry = SkillRegistry::load(LoaderConfig {
+        user_root: Some(tmp.path().to_path_buf()),
+        repo_root: None,
+    })
+    .await
+    .expect("load");
+
+    let skill = registry.get("legacy").expect("found");
+    assert_eq!(
+        skill.required_tools,
+        vec!["foo".to_string(), "bar".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn tools_satisfied_by_gates_invocation_when_tools_missing() {
+    let tmp = TempDir::new().unwrap();
+    write_skill(
+        tmp.path(),
+        "deploy.md",
+        "---\n\
+name: deploy\n\
+required_tools: [wrangler_deploy, doppler_secret_fetch]\n\
+---\n\
+body\n",
+    );
+
+    let registry = SkillRegistry::load(LoaderConfig {
+        user_root: Some(tmp.path().to_path_buf()),
+        repo_root: None,
+    })
+    .await
+    .expect("load");
+    let skill = registry.get("deploy").expect("found");
+
+    // Missing both tools.
+    let granted: Vec<&str> = vec![];
+    assert!(!skill.tools_satisfied_by(&granted));
+    assert_eq!(
+        skill.missing_tools(&granted),
+        vec![
+            "wrangler_deploy".to_string(),
+            "doppler_secret_fetch".to_string(),
+        ]
+    );
+
+    // One of two missing.
+    let partial = vec!["wrangler_deploy"];
+    assert!(!skill.tools_satisfied_by(&partial));
+    assert_eq!(
+        skill.missing_tools(&partial),
+        vec!["doppler_secret_fetch".to_string()]
+    );
+
+    // Both granted -> gate passes.
+    let full = vec!["wrangler_deploy", "doppler_secret_fetch", "extra_tool"];
+    assert!(skill.tools_satisfied_by(&full));
+    assert!(skill.missing_tools(&full).is_empty());
+}
+
+#[tokio::test]
+async fn tools_satisfied_by_passes_when_no_required_tools() {
+    let tmp = TempDir::new().unwrap();
+    write_skill(
+        tmp.path(),
+        "open.md",
+        "---\n\
+name: open\n\
+description: No required tools.\n\
+---\n\
+body\n",
+    );
+
+    let registry = SkillRegistry::load(LoaderConfig {
+        user_root: Some(tmp.path().to_path_buf()),
+        repo_root: None,
+    })
+    .await
+    .expect("load");
+    let skill = registry.get("open").expect("found");
+    let granted: Vec<&str> = vec![];
+    assert!(skill.tools_satisfied_by(&granted));
+    assert!(skill.missing_tools(&granted).is_empty());
+}
+
+#[tokio::test]
 async fn front_matter_yaml_error_returns_error() {
     let tmp = TempDir::new().unwrap();
     // `roles` is supposed to be a sequence of strings — passing a mapping
