@@ -14,6 +14,7 @@ use crate::agent::OutputFormat;
 mod process_handle;
 
 pub mod artifact;
+pub mod audit;
 pub mod scope;
 pub mod skill;
 pub mod skills;
@@ -566,6 +567,14 @@ pub enum CliCommand {
     /// the AI Gateway routing rule — no provider SDK is ever called directly.
     #[command(subcommand)]
     Skills(crate::skills::SkillsCommand),
+
+    /// Query, follow, summarize, and mirror the symphony audit log.
+    ///
+    /// Operator surface for the JSONL audit log written by symphony at
+    /// `~/.warp/symphony/audit.log` (PDX-28). Used together with the Grafana
+    /// `helm-overview.json` dashboard from PDX-115.
+    #[command(subcommand)]
+    Audit(crate::audit::AuditCommand),
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.

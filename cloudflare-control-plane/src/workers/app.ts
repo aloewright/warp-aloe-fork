@@ -62,6 +62,7 @@ import {
 } from "../shared/webhooks.js";
 import { auditLog, getDb, users } from "../db/index.js";
 import { resolveWorkflowBinding, type WorkflowBinding } from "./workflows/index.js";
+import { handleAuditSync, type AuditMirrorEnv } from "./audit_mirror.js";
 import type {
   DeployWorkflowParams,
   SwarmWorkflowParams
@@ -75,7 +76,7 @@ export interface SessionDoNamespace {
   get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
 }
 
-export interface ControlPlaneEnv extends AuthEnv {
+export interface ControlPlaneEnv extends AuthEnv, AuditMirrorEnv {
   HELM_ENVIRONMENT: HelmEnvironment;
   HELM_VERSION: string;
   HELM_BUILD_ID: string;
@@ -532,6 +533,16 @@ export function createApp(): Hono<AppEnv> {
       manifest,
       reconciliation: auditInventory(manifest, env.HELM_ENVIRONMENT, inventory)
     });
+  });
+
+  // ── Audit log mirror (PDX-115) ──────────────────────────────────────────
+  // Local symphony daemons POST batches of JSONL audit rows here; we insert
+  // them into the D1 `audit_log` table for cloud-side query (Grafana panel,
+  // dashboard, soak harness inspector). Authenticated like other protected
+  // surfaces — `audit({})` middleware writes its own attribution row, and
+  // the handler is responsible for parameterised insert.
+  app.post("/api/audit/sync", async (c) => {
+    return handleAuditSync(c.req.raw, c.env as ControlPlaneEnv);
   });
 
   // ── Workflows (PDX-25) ──────────────────────────────────────────────────

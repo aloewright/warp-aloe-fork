@@ -80,6 +80,7 @@ mod admin;
 mod agent_config;
 mod ambient;
 mod artifact;
+mod audit;
 pub(crate) mod artifact_upload;
 mod common;
 mod config_file;
@@ -204,6 +205,7 @@ fn dispatch_command(
             "`warp new` is not yet wired into the in-app dispatcher; run via the `warp_cli` binary"
         )),
         CliCommand::Skills(skills_cmd) => skills_marketplace::run(global_options, skills_cmd),
+        CliCommand::Audit(audit_cmd) => audit::run(ctx, global_options, audit_cmd),
     }
 }
 
@@ -1296,6 +1298,10 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Artifact(_) => true,
         CliCommand::New(_) => false,
         CliCommand::Skills(_) => false,
+        // `warp audit` is a local-first operator tool that touches the
+        // on-disk symphony JSONL; auth is only needed for `--remote` sync,
+        // which carries its own bearer token.
+        CliCommand::Audit(_) => false,
     }
 }
 
@@ -1520,6 +1526,12 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         CliCommand::New(_) => CliTelemetryEvent::New,
         CliCommand::Skills(skills_cmd) => CliTelemetryEvent::Skills {
             subcommand: warp_cli::skills::telemetry_label(skills_cmd),
+        },
+        CliCommand::Audit(audit_cmd) => match audit_cmd {
+            warp_cli::audit::AuditCommand::Query(_) => CliTelemetryEvent::AuditQuery,
+            warp_cli::audit::AuditCommand::Follow(_) => CliTelemetryEvent::AuditFollow,
+            warp_cli::audit::AuditCommand::Summary(_) => CliTelemetryEvent::AuditSummary,
+            warp_cli::audit::AuditCommand::Sync(_) => CliTelemetryEvent::AuditSync,
         },
     }
 }

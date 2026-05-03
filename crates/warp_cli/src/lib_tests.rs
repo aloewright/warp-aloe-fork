@@ -1867,3 +1867,110 @@ fn finish_task_rejects_missing_status() {
     ]);
     assert!(result.is_err());
 }
+
+#[test]
+fn audit_query_parses_action_and_since() {
+    let args = Args::try_parse_from([
+        "warp",
+        "audit",
+        "query",
+        "--action",
+        "blocked",
+        "--since",
+        "1h",
+        "--limit",
+        "50",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("expected CommandLine");
+    };
+    let CliCommand::Audit(crate::audit::AuditCommand::Query(q)) = *boxed_cmd else {
+        panic!("expected Audit::Query");
+    };
+    assert_eq!(q.common.action.as_deref(), Some("blocked"));
+    assert_eq!(q.limit, Some(50));
+    assert!(q.common.since.is_some());
+}
+
+#[test]
+fn audit_follow_parses_repeated_filter() {
+    let args = Args::try_parse_from([
+        "warp",
+        "audit",
+        "follow",
+        "--filter",
+        "rule=budget_exceeded",
+        "--filter",
+        "agent_id=a1",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("expected CommandLine");
+    };
+    let CliCommand::Audit(crate::audit::AuditCommand::Follow(f)) = *boxed_cmd else {
+        panic!("expected Audit::Follow");
+    };
+    assert_eq!(
+        f.common.filter,
+        vec![
+            "rule=budget_exceeded".to_string(),
+            "agent_id=a1".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn audit_summary_parses_path_override() {
+    let args = Args::try_parse_from([
+        "warp",
+        "audit",
+        "summary",
+        "--path",
+        "/tmp/audit.log",
+        "--since",
+        "24h",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("expected CommandLine");
+    };
+    let CliCommand::Audit(crate::audit::AuditCommand::Summary(s)) = *boxed_cmd else {
+        panic!("expected Audit::Summary");
+    };
+    assert_eq!(
+        s.common.path.as_deref(),
+        Some(std::path::Path::new("/tmp/audit.log"))
+    );
+}
+
+#[test]
+fn audit_sync_requires_remote() {
+    let result = Args::try_parse_from(["warp", "audit", "sync"]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn audit_sync_parses_remote_and_batch_size() {
+    let args = Args::try_parse_from([
+        "warp",
+        "audit",
+        "sync",
+        "--remote",
+        "https://helm-control-plane-prod.workers.dev",
+        "--batch-size",
+        "100",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("expected CommandLine");
+    };
+    let CliCommand::Audit(crate::audit::AuditCommand::Sync(s)) = *boxed_cmd else {
+        panic!("expected Audit::Sync");
+    };
+    assert_eq!(
+        s.remote,
+        "https://helm-control-plane-prod.workers.dev".to_string()
+    );
+    assert_eq!(s.batch_size, 100);
+}

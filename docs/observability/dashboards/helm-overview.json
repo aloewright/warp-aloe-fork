@@ -1,0 +1,173 @@
+{
+  "$schema": "https://grafana.com/schemas/dashboard/v10.json",
+  "title": "Helm Overview (PDX-115)",
+  "uid": "helm-overview",
+  "tags": ["helm", "symphony", "soak", "audit", "pdx-115"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "description": "Operator overview for the Helm / Symphony stack.\n\nWires up three data sources by name; the operator must configure them at install time:\n  * `Loki`        — tails the symphony JSONL audit log (PDX-28) at\n                   `~/.warp/symphony/audit.log` via promtail/vector with\n                   labels {job=\"symphony-audit\"}.\n  * `Prometheus`  — scrapes the soak-harness metrics exporter (PDX-29) and\n                   the symphony task counters.\n  * `CF AI Gateway` — Cloudflare AI Gateway analytics, exposed via the\n                   `cloudflare-mcp` Worker (PDX-76); used for tier\n                   transitions per provider and MCP re-routings.\n\nPanel -> data source mapping:\n  1 tasks_dispatched_1h         -> Prometheus\n  2 tasks_dispatched_24h        -> Prometheus\n  3 tasks_dispatched_7d         -> Prometheus\n  4 tasks_completed_failed      -> Prometheus\n  5 tier_transitions_provider   -> CF AI Gateway\n  6 mcp_reroutings              -> CF AI Gateway\n  7 audit_severity_histogram    -> Loki\n  8 soak_invariant_breaches     -> Prometheus\n\nTo import: ensure data sources named exactly `Loki`, `Prometheus`, and\n`CF AI Gateway` exist in the target Grafana org, then\n`Dashboards -> Import -> Upload JSON file`.",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROM",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" },
+        "hide": 2
+      },
+      {
+        "name": "DS_LOKI",
+        "type": "datasource",
+        "query": "loki",
+        "current": { "text": "Loki", "value": "Loki" },
+        "hide": 2
+      },
+      {
+        "name": "DS_CFAIG",
+        "type": "datasource",
+        "query": "cloudflare-ai-gateway",
+        "current": { "text": "CF AI Gateway", "value": "CF AI Gateway" },
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Tasks dispatched (1h)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(symphony_tasks_dispatched_total[1h]))"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tasks dispatched (24h)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(symphony_tasks_dispatched_total[24h]))"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Tasks dispatched (7d)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(symphony_tasks_dispatched_total[7d]))"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Tasks completed vs failed",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 18, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "completed",
+          "expr": "sum(rate(symphony_tasks_completed_total[5m]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "failed",
+          "expr": "sum(rate(symphony_tasks_failed_total[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Tier transitions per provider",
+      "description": "Provider-level tier upgrades / downgrades reported by the Cloudflare AI Gateway analytics MCP (PDX-76).",
+      "datasource": { "type": "cloudflare-ai-gateway", "uid": "${DS_CFAIG}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "transitions",
+          "groupBy": ["provider", "transition_kind"]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "MCP re-routings",
+      "description": "Count of MCP rerouting events (provider failover, BYOK virtual-key swap, fallback-route hit) from the AI Gateway analytics surface.",
+      "datasource": { "type": "cloudflare-ai-gateway", "uid": "${DS_CFAIG}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "reroutings",
+          "groupBy": ["reason"]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "histogram",
+      "title": "Audit-log severity histogram",
+      "description": "Histogram of `action` values from the symphony audit log JSONL, grouped by severity bucket (blocked > overridden > allowed).",
+      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (action) (count_over_time({job=\"symphony-audit\"} | json | __error__=`` [$__interval]))"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Soak-harness invariant breaches",
+      "description": "Counter of invariant breaches emitted by the PDX-29 soak harness via `~/.warp/symphony/soak-metrics.jsonl`. A non-zero value during a soak run is an alertable condition.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(symphony_soak_invariant_breaches_total[24h]))"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
