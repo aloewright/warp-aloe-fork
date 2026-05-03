@@ -11,7 +11,9 @@
 
 #![deny(missing_docs)]
 
+pub mod approval_poller;
 pub mod audit;
+pub mod deploy_tool;
 pub mod diff_guard;
 pub mod linear_graphql;
 pub mod numstat;
@@ -23,7 +25,15 @@ pub mod triggers;
 pub mod workflow;
 pub mod workspace;
 
+pub use approval_poller::{
+    ApprovalComment, ApprovalPoller, ApprovalSink, CommentSource, HttpApprovalSink, PollOutcome,
+    PollerState, DEFAULT_APPROVAL_TOKEN,
+};
 pub use audit::{AuditEvent, AuditLog};
+pub use deploy_tool::{
+    DeployConfigResolver, DeployTool, DeployToolError, DeployWorkflowClient,
+    DeployWorkflowParams, HttpDeployWorkflowClient, TOOL_NAME as DEPLOY_TOOL_NAME,
+};
 pub use diff_guard::{DiffGuard, DiffGuardError, DiffStat};
 pub use linear_graphql::{LinearGraphQlExecutor, LinearGraphQlTool, DEFAULT_RATE_PER_MINUTE, TOOL_NAME};
 pub use orchestrator::{Orchestrator, OrchestratorError};
@@ -35,7 +45,8 @@ pub use simulator_tool::{
 pub use tracker::{BlockerRef, Issue, LinearClient, TrackerError};
 pub use triggers::{spawn_triggers, TriggerError, TriggerSurfaces};
 pub use workflow::{
-    AgentConfig, CronJobConfig, HooksConfig, PollingConfig, ServerConfig, TrackerConfig,
-    WebhookConfig, WorkflowConfig, WorkflowDefinition, WorkflowError, WorkspaceConfig,
+    AgentConfig, CronJobConfig, DeployConfig, HooksConfig, PollingConfig, ServerConfig,
+    TrackerConfig, WebhookConfig, WorkflowConfig, WorkflowDefinition, WorkflowError,
+    WorkspaceConfig,
 };
 pub use workspace::{Workspace, WorkspaceError, WorkspaceManager};

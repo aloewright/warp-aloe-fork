@@ -21,13 +21,17 @@
 //!   `git diff --shortstat`). [`crate::diff_size`] is the
 //!   pre-parsed-input alternative used by callers that already have a
 //!   numstat parse on hand.
-//! * [`crate::deploy_gate`] is library-only at the moment and is meant
-//!   to plug into the agent-dispatch path. The current Warp dispatch
-//!   layer (`app/src/ai/agent_sdk/driver/local_orchestrator.rs`) wraps
-//!   a driver that does not expose a discrete pre-tool-call hook; a
-//!   dedicated wiring pass at the MCP forwarder or driver level is
-//!   tracked separately so this PR can land independent of those
-//!   surfaces.
+//! * [`crate::deploy_gate`] is wired into
+//!   `app/src/ai/agent_sdk/driver/local_orchestrator.rs::LocalOrchestratorAgent`
+//!   by PDX-114 [E2]: the agent owns a default-pattern [`DeployGate`]
+//!   and refuses any staged prompt whose resolved text is itself a
+//!   production-deploy command (the typical "agent typed a shell
+//!   command" path). The refusal reason names the daemon-mediated
+//!   `deploy` tool from `crates/symphony/src/deploy_tool.rs`, which
+//!   is the only legitimate deploy escape hatch. A finer-grained
+//!   per-tool-call hook at the MCP forwarder layer remains tracked
+//!   separately; the staged-prompt check is the verifiable seam we
+//!   have today.
 //!
 //! Sites use the same audit-log surface so a single `audit.log`
 //! reflects every guardrail trip regardless of dispatcher.

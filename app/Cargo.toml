@@ -275,6 +275,7 @@ wgpu.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 agents.workspace = true
+auto_healing.workspace = true
 orchestrator.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true

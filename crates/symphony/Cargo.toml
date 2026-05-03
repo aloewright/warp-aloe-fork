@@ -43,6 +43,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
+regex = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 tokio-stream = "0.1"

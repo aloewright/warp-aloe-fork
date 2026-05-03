@@ -36,6 +36,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use async_trait::async_trait;
+use auto_healing::{DeployGate, DeployGateDecision};
 use chrono::Utc;
 use orchestrator::{
     Agent, AgentError, AgentEvent, AgentEventStream, AgentId, AgentRegistration, Budget,
@@ -154,9 +155,27 @@ struct StagedRun {
 /// Now process-stable: the agent itself is registered once into the
 /// persistent router, and per-call state is set via [`Self::stage_run`]
 /// immediately before dispatch.
+///
+/// # PDX-114 [E2] deploy-gate enforcement
+///
+/// `LocalOrchestratorAgent` carries a [`DeployGate`] (defaulted to the
+/// `auto_healing` production patterns: `wrangler deploy`, `gh release
+/// create`, `cargo publish`, `npm publish`) and consults it inside
+/// [`Self::evaluate_deploy_gate`]. This is the only structurally clean
+/// pre-tool-call hook the local driver currently exposes — when the
+/// agent's resolved prompt text is itself a deploy invocation (the
+/// typical "agent typed a shell command" path), the agent refuses the
+/// run with a `RunOutcome::Refused`-style error pointing at the
+/// daemon-mediated `deploy` tool. Future driver-level pre-tool-call
+/// hooks will reuse [`Self::evaluate_deploy_gate`] verbatim.
 pub(crate) struct LocalOrchestratorAgent {
     capabilities: Capabilities,
     staged: AsyncMutex<Option<StagedRun>>,
+    /// PDX-114 [E2] production-deploy command gate. Owns the regex
+    /// set; consulted from [`Self::evaluate_deploy_gate`] before any
+    /// staged prompt is dispatched into the driver. Defaults to the
+    /// canonical `auto_healing::DeployGate::default()` pattern set.
+    deploy_gate: DeployGate,
 }
 
 impl LocalOrchestratorAgent {
@@ -169,6 +188,24 @@ impl LocalOrchestratorAgent {
                 supports_vision: false,
             },
             staged: AsyncMutex::new(None),
+            deploy_gate: DeployGate::default(),
+        }
+    }
+
+    /// PDX-114 [E2] — evaluate `cmd` against the embedded deploy gate.
+    ///
+    /// Public so tests (and any future per-tool-call hook) can call
+    /// the same check directly. When `cmd` matches a deploy pattern,
+    /// returns `Some(reason)` carrying the human-readable refusal
+    /// message — which always points the agent at the daemon-mediated
+    /// `deploy` tool so it learns the right escape hatch on the next
+    /// turn.
+    pub(crate) fn evaluate_deploy_gate(&self, cmd: &str) -> Option<String> {
+        match self.deploy_gate.evaluate(cmd) {
+            DeployGateDecision::Allow => None,
+            DeployGateDecision::Block { reason } => Some(format!(
+                "{reason}. Use the `deploy` tool instead — it routes the deploy through Symphony's DeployWorkflow with the human approval gate (PDX-114)."
+            )),
         }
     }
 
@@ -256,8 +293,37 @@ impl Agent for LocalOrchestratorAgent {
         let StagedRun { foreground, prompt } = staged;
         let task_id = task.id;
 
+        // PDX-114 [E2] deploy-gate enforcement. The local driver does
+        // not yet expose a per-tool-call hook, but the staged prompt
+        // *is* the input we have visibility into right now: when the
+        // agent's resolved prompt text is itself a `wrangler deploy`
+        // / `gh release create` / `cargo publish` / `npm publish`
+        // invocation, refuse the run before spawning the model.
+        // The deploy tool (PDX-114) is the only legitimate path; the
+        // refusal reason names it explicitly so the agent learns the
+        // right escape hatch on the next turn.
+        let prompt_text = match &prompt {
+            AgentRunPrompt::Local(s) => s.clone(),
+            // ServerSide prompts are resolved server-side; they don't
+            // carry a literal command line we can scan here.
+            AgentRunPrompt::ServerSide { .. } => String::new(),
+        };
+        let refusal = if prompt_text.is_empty() {
+            None
+        } else {
+            self.evaluate_deploy_gate(&prompt_text)
+        };
+
         let stream = async_stream::stream! {
             yield AgentEvent::Started { task_id };
+
+            if let Some(reason) = refusal {
+                yield AgentEvent::Failed {
+                    task_id,
+                    error: format!("deploy-gate refused: {reason}"),
+                };
+                return;
+            }
 
             let status_rx = match foreground
                 .spawn(move |me, ctx| me.execute_run(prompt, ctx))
@@ -1370,5 +1436,60 @@ mod tests {
         // model variant. Guard via the round-trip through the constant.
         let cli = ClaudeModel::Haiku45.cli_arg();
         assert_eq!(cli, "claude-haiku-4-5");
+    }
+
+    /// PDX-114 [E2]: the local agent's deploy gate refuses to dispatch
+    /// when the resolved prompt text is itself a `wrangler deploy` /
+    /// `gh release create` / `cargo publish` / `npm publish` invocation.
+    /// The refusal reason names the daemon-mediated `deploy` tool so
+    /// the agent learns the right escape hatch on the next turn.
+    #[test]
+    fn local_agent_refuses_wrangler_deploy_prompt_via_deploy_gate() {
+        let agent = LocalOrchestratorAgent::new();
+        let reason = agent
+            .evaluate_deploy_gate("wrangler deploy --env production")
+            .expect("expected refusal");
+        assert!(
+            reason.contains("deploy") && reason.contains("tool"),
+            "refusal must point at the deploy tool: {reason}"
+        );
+    }
+
+    #[test]
+    fn local_agent_refuses_npm_publish_prompt_via_deploy_gate() {
+        let agent = LocalOrchestratorAgent::new();
+        assert!(agent.evaluate_deploy_gate("npm publish").is_some());
+    }
+
+    #[test]
+    fn local_agent_refuses_cargo_publish_prompt_via_deploy_gate() {
+        let agent = LocalOrchestratorAgent::new();
+        assert!(agent.evaluate_deploy_gate("cargo publish").is_some());
+    }
+
+    #[test]
+    fn local_agent_refuses_gh_release_create_prompt_via_deploy_gate() {
+        let agent = LocalOrchestratorAgent::new();
+        assert!(agent
+            .evaluate_deploy_gate("gh release create v1.2.3 --notes ./RELEASE.md")
+            .is_some());
+    }
+
+    #[test]
+    fn local_agent_allows_non_deploy_prompts() {
+        let agent = LocalOrchestratorAgent::new();
+        for ok in [
+            "ls -la",
+            "cargo build",
+            "npm install",
+            "git commit -m foo",
+            "wrangler dev",
+            "wrangler tail",
+        ] {
+            assert!(
+                agent.evaluate_deploy_gate(ok).is_none(),
+                "unexpected refusal for: {ok}"
+            );
+        }
     }
 }
