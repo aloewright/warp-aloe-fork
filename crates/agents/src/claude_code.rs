@@ -275,6 +275,26 @@ impl Agent for ClaudeCodeAgent {
             }
         }
 
+        // PDX-118 [E6]: route through Cloudflare AI Gateway when the
+        // user has opted in via `~/.warp/ai_gateway.toml`. No-op when
+        // the toggle is off or the config is missing — agent spawns
+        // with the user's existing env unchanged in that case.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let cwd = if task.context.cwd.as_os_str().is_empty() {
+                None
+            } else {
+                Some(task.context.cwd.as_path())
+            };
+            let _injection = crate::gateway::maybe_apply_to_command(
+                &mut cmd,
+                ai_gateway_config::AgentKind::ClaudeCode,
+                &self.id,
+                cwd,
+            )
+            .await;
+        }
+
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

@@ -252,13 +252,69 @@ pub(super) struct CliAgentSignInWidget {
     claude_button: MouseStateHandle,
     codex_button: MouseStateHandle,
     ollama_button: MouseStateHandle,
+    /// PDX-118 [E6]: toggle button for "Route Claude Code through gateway".
+    gateway_claude_toggle: MouseStateHandle,
+    /// PDX-118 [E6]: toggle button for "Route Codex through gateway".
+    gateway_codex_toggle: MouseStateHandle,
+}
+
+/// PDX-118 [E6]: snapshot of the on-disk `~/.warp/ai_gateway.toml`.
+/// Loaded synchronously in `render` because the file is small (a few
+/// hundred bytes) and rarely changes.
+struct GatewaySnapshot {
+    account_id: String,
+    gateway_slug: String,
+    token_doppler_ref: String,
+    claude_enabled: bool,
+    codex_enabled: bool,
+}
+
+impl Default for GatewaySnapshot {
+    fn default() -> Self {
+        Self {
+            account_id: String::new(),
+            gateway_slug: ai_gateway_config::DEFAULT_GATEWAY_SLUG.to_string(),
+            token_doppler_ref: ai_gateway_config::DEFAULT_TOKEN_DOPPLER_REF.to_string(),
+            claude_enabled: false,
+            codex_enabled: false,
+        }
+    }
+}
+
+impl GatewaySnapshot {
+    fn load() -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if let Ok(Some(cfg)) = ai_gateway_config::GatewayConfig::load_default() {
+                return Self {
+                    account_id: cfg.account_id,
+                    gateway_slug: cfg.gateway_slug,
+                    token_doppler_ref: cfg.token_doppler_ref,
+                    claude_enabled: cfg.claude_code.enabled,
+                    codex_enabled: cfg.codex.enabled,
+                };
+            }
+        }
+        Self::default()
+    }
+
+    fn endpoint_summary(&self) -> String {
+        if self.account_id.trim().is_empty() {
+            "Not configured. Edit ~/.warp/ai_gateway.toml: set account_id, gateway_slug (default \"x\"), and token_doppler_ref (default \"CF_AIG_TOKEN\").".to_string()
+        } else {
+            format!(
+                "Account {} via gateway \"{}\". Token resolved from Doppler ref \"{}\".",
+                self.account_id, self.gateway_slug, self.token_doppler_ref
+            )
+        }
+    }
 }
 
 impl SettingsWidget for CliAgentSignInWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "claude code codex ollama cli sign in login authenticate third-party coding agent install"
+        "claude code codex ollama cli sign in login authenticate third-party coding agent install ai gateway cloudflare routing byok doppler cf_aig_token"
     }
 
     fn render(
@@ -314,6 +370,99 @@ impl SettingsWidget for CliAgentSignInWidget {
             }),
             ..Default::default()
         };
+
+        // ── PDX-118 [E6] AI Gateway routing section ───────────────────
+        // Sits ABOVE the per-agent sign-in rows so users see the
+        // gateway routing posture before they wonder where their
+        // CLAUDE_API_KEY went. The endpoint fields live in
+        // `~/.warp/ai_gateway.toml` (edit out-of-band); the per-agent
+        // toggles ship as on-screen buttons.
+        let gateway = GatewaySnapshot::load();
+
+        let gateway_header = Container::new(
+            Align::new(
+                Text::new_inline(
+                    "AI Gateway routing",
+                    appearance.ui_font_family(),
+                    SUBHEADER_FONT_SIZE,
+                )
+                .with_style(Properties::default().weight(Weight::Bold))
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+            )
+            .left()
+            .finish(),
+        )
+        .with_padding_bottom(8.)
+        .finish();
+
+        let gateway_description = Container::new(
+            Align::new(
+                Text::new_inline(
+                    "Route third-party agent CLIs through Cloudflare AI Gateway for caching, rate limits, observability, and BYOK routing. Token is resolved from Doppler at spawn time.",
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE,
+                )
+                .with_color(theme.nonactive_ui_text_color().into())
+                .finish(),
+            )
+            .left()
+            .finish(),
+        )
+        .with_padding_bottom(8.)
+        .finish();
+
+        let gateway_endpoint_banner: Box<dyn Element> = Container::new(
+            render_settings_info_banner(
+                "Gateway endpoint",
+                Some(&gateway.endpoint_summary()),
+                appearance,
+            ),
+        )
+        .with_padding_bottom(12.)
+        .finish();
+
+        let gateway_claude_btn_label = if gateway.claude_enabled {
+            "Disable gateway routing for Claude Code"
+        } else {
+            "Enable gateway routing for Claude Code"
+        };
+        let gateway_claude_btn = ui_builder
+            .button(ButtonVariant::Accent, self.gateway_claude_toggle.clone())
+            .with_text_label(gateway_claude_btn_label.to_owned())
+            .with_style(button_style.clone())
+            .build()
+            .on_click({
+                let next = !gateway.claude_enabled;
+                move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleGatewayForAgent {
+                        agent: ai_gateway_config::AgentKind::ClaudeCode,
+                        enabled: next,
+                    });
+                }
+            })
+            .finish();
+
+        let gateway_codex_btn_label = if gateway.codex_enabled {
+            "Disable gateway routing for Codex"
+        } else {
+            "Enable gateway routing for Codex"
+        };
+        let gateway_codex_btn = ui_builder
+            .button(ButtonVariant::Accent, self.gateway_codex_toggle.clone())
+            .with_text_label(gateway_codex_btn_label.to_owned())
+            .with_style(button_style.clone())
+            .build()
+            .on_click({
+                let next = !gateway.codex_enabled;
+                move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleGatewayForAgent {
+                        agent: ai_gateway_config::AgentKind::Codex,
+                        enabled: next,
+                    });
+                }
+            })
+            .finish();
 
         // ── Claude Code row ────────────────────────────────────────────
         let claude_state = CliAgentAuthState::detect_claude();
@@ -402,7 +551,20 @@ impl SettingsWidget for CliAgentSignInWidget {
         };
 
         // ── Compose ────────────────────────────────────────────────────
-        let mut children: Vec<Box<dyn Element>> = vec![header, description];
+        let mut children: Vec<Box<dyn Element>> = vec![
+            // PDX-118 [E6]: gateway routing block sits above the
+            // per-agent sign-in rows.
+            gateway_header,
+            gateway_description,
+            gateway_endpoint_banner,
+            gateway_claude_btn,
+            spacer(),
+            gateway_codex_btn,
+            spacer(),
+            // Per-agent sign-in rows below.
+            header,
+            description,
+        ];
         if let Some(b) = claude_banner {
             children.push(b);
         }
@@ -507,5 +669,58 @@ mod tests {
         assert_eq!(s.button_label(), "Reload Ollama models");
         let (title, _) = s.banner();
         assert!(!title.to_lowercase().contains("not installed"));
+    }
+
+    /// PDX-118 [E6]: an unconfigured snapshot points the user at the
+    /// TOML file they need to edit, so they don't sit waiting for a
+    /// flow that isn't implemented yet.
+    #[test]
+    fn gateway_snapshot_default_shows_setup_instructions() {
+        let s = GatewaySnapshot::default();
+        let summary = s.endpoint_summary();
+        assert!(summary.to_lowercase().contains("not configured"));
+        assert!(summary.contains("ai_gateway.toml"));
+        assert!(!s.claude_enabled);
+        assert!(!s.codex_enabled);
+    }
+
+    /// PDX-118 [E6]: a populated snapshot prints the account id +
+    /// gateway slug + token Doppler ref so a glance at the settings
+    /// page tells the user where their agent traffic is going.
+    #[test]
+    fn gateway_snapshot_populated_summary_mentions_account_and_doppler_ref() {
+        let s = GatewaySnapshot {
+            account_id: "ACC42".to_string(),
+            gateway_slug: "x".to_string(),
+            token_doppler_ref: "CF_AIG_TOKEN".to_string(),
+            claude_enabled: true,
+            codex_enabled: false,
+        };
+        let summary = s.endpoint_summary();
+        assert!(summary.contains("ACC42"));
+        assert!(summary.contains("CF_AIG_TOKEN"));
+        assert!(summary.contains("\"x\""));
+    }
+
+    /// PDX-118 [E6]: search_terms() must match the gateway routing
+    /// vocabulary so the settings search surface picks the widget up
+    /// for queries like "ai gateway" or "cloudflare".
+    #[test]
+    fn search_terms_cover_gateway_vocabulary() {
+        let w = CliAgentSignInWidget::default();
+        let terms = w.search_terms();
+        for needle in [
+            "ai gateway",
+            "cloudflare",
+            "routing",
+            "byok",
+            "doppler",
+            "cf_aig_token",
+        ] {
+            assert!(
+                terms.contains(needle),
+                "search_terms missing '{needle}': {terms}"
+            );
+        }
     }
 }

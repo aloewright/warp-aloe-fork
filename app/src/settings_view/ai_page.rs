@@ -2305,6 +2305,29 @@ pub enum AISettingsPageAction {
     /// persistent Router so newly pulled models become routable without
     /// an app restart. No-op when `ollama` is not on `PATH`.
     ReloadOllamaModels,
+    /// PDX-118 [E6]: persist the AI Gateway routing config block
+    /// (account id + gateway slug + Doppler ref). Per-agent toggles
+    /// are dispatched separately via [`Self::ToggleGatewayForAgent`].
+    SetAIGatewayConfig {
+        /// Cloudflare account id (segment after `/v1/` in the gateway
+        /// URL).
+        account_id: String,
+        /// Gateway slug (segment after the account id). Defaults to
+        /// `"x"`.
+        gateway_slug: String,
+        /// Doppler binding name whose value resolves to `CF_AIG_TOKEN`.
+        token_doppler_ref: String,
+    },
+    /// PDX-118 [E6]: flip per-agent routing without touching the
+    /// gateway endpoint config. Re-saves
+    /// `~/.warp/ai_gateway.toml` immediately so the next agent spawn
+    /// picks up the new state.
+    ToggleGatewayForAgent {
+        /// Which third-party CLI to toggle.
+        agent: ai_gateway_config::AgentKind,
+        /// New enabled state.
+        enabled: bool,
+    },
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -2681,6 +2704,62 @@ impl TypedActionView for AISettingsPageView {
                             ctx.notify();
                         },
                     );
+                }
+                ctx.notify();
+            }
+            AISettingsPageAction::SetAIGatewayConfig {
+                account_id,
+                gateway_slug,
+                token_doppler_ref,
+            } => {
+                // PDX-118 [E6]. Load the existing config (so we don't
+                // clobber per-agent toggles), update the endpoint
+                // fields, and re-persist. Errors are logged — the
+                // settings UI will re-render with whatever
+                // `GatewayConfig::load_default` returns next, so the
+                // user sees the failure-to-save reflected.
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let mut cfg = ai_gateway_config::GatewayConfig::load_default()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    cfg.account_id = account_id.clone();
+                    cfg.gateway_slug = if gateway_slug.trim().is_empty() {
+                        ai_gateway_config::DEFAULT_GATEWAY_SLUG.to_string()
+                    } else {
+                        gateway_slug.clone()
+                    };
+                    cfg.token_doppler_ref = if token_doppler_ref.trim().is_empty() {
+                        ai_gateway_config::DEFAULT_TOKEN_DOPPLER_REF.to_string()
+                    } else {
+                        token_doppler_ref.clone()
+                    };
+                    if let Err(e) = cfg.save_default() {
+                        log::warn!("failed to save ai_gateway.toml: {e}");
+                    }
+                }
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleGatewayForAgent { agent, enabled } => {
+                // PDX-118 [E6]. Flip the per-agent toggle in
+                // `~/.warp/ai_gateway.toml` without touching the
+                // gateway endpoint fields. The next agent spawn
+                // re-loads the config, so no app restart is needed.
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let mut cfg = ai_gateway_config::GatewayConfig::load_default()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let route = ai_gateway_config::AgentRoute { enabled: *enabled };
+                    match agent {
+                        ai_gateway_config::AgentKind::ClaudeCode => cfg.claude_code = route,
+                        ai_gateway_config::AgentKind::Codex => cfg.codex = route,
+                    }
+                    if let Err(e) = cfg.save_default() {
+                        log::warn!("failed to save ai_gateway.toml: {e}");
+                    }
                 }
                 ctx.notify();
             }

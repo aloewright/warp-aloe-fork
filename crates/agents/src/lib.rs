@@ -10,6 +10,9 @@
 pub mod claude_code;
 pub mod codex;
 pub mod foundation_models;
+#[cfg(not(target_family = "wasm"))]
+#[doc(hidden)]
+pub mod gateway;
 pub mod ollama;
 pub mod remote;
 

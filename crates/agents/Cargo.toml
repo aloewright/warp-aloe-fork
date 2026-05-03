@@ -9,10 +9,14 @@ publish.workspace = true
 [dependencies]
 orchestrator = { workspace = true }
 foundation_models = { workspace = true }
+ai_gateway_config = { path = "../ai_gateway_config" }
+doppler = { workspace = true }
 async-trait.workspace = true
 async-stream.workspace = true
 chrono = { workspace = true }
 futures-core = "0.3.31"
+dirs = { workspace = true }
+once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror.workspace = true
@@ -27,7 +31,9 @@ tracing.workspace = true
 which = "4.4"
 
 [dev-dependencies]
+ai_gateway_config = { path = "../ai_gateway_config" }
 futures-util = { workspace = true }
+tempfile.workspace = true
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "macros",
