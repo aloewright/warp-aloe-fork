@@ -225,6 +225,22 @@ impl TypedActionView for DopplerSettingsPageView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             DopplerSettingsPageAction::SignIn => {
+                // Resolve the doppler binary by walking PATH ourselves rather
+                // than relying on `Command::new("doppler")` to inherit one.
+                // Apps launched from Finder / `open` get a minimal PATH that
+                // doesn't include `/opt/homebrew/bin` or `/usr/local/bin`
+                // where Homebrew installs Doppler — without `which::which`
+                // the spawn silently fails with "No such file or directory"
+                // and the user clicks the button to no effect.
+                let doppler_bin = match which::which("doppler") {
+                    Ok(path) => path,
+                    Err(err) => {
+                        log::warn!(
+                            "doppler CLI not found on PATH (try `brew install doppler`): {err}"
+                        );
+                        return;
+                    }
+                };
                 // Fire-and-forget: do NOT wait, do NOT capture output. The
                 // Doppler CLI opens the browser and runs the OAuth dance on
                 // its own. --yes accepts the "already logged in -> overwrite"
@@ -232,7 +248,7 @@ impl TypedActionView for DopplerSettingsPageView {
                 // asking; nulling stdio prevents the child from blocking on
                 // the GUI's missing TTY (it would hang at the interactive
                 // prompt and never open the browser).
-                match std::process::Command::new("doppler")
+                match std::process::Command::new(&doppler_bin)
                     .arg("login")
                     .arg("--yes")
                     .arg("--scope")
@@ -243,7 +259,10 @@ impl TypedActionView for DopplerSettingsPageView {
                     .spawn()
                 {
                     Ok(_) => self.poll_until_authenticated(ctx),
-                    Err(err) => log::warn!("failed to spawn `doppler login`: {err}"),
+                    Err(err) => log::warn!(
+                        "failed to spawn `{}`: {err}",
+                        doppler_bin.display()
+                    ),
                 }
             }
             DopplerSettingsPageAction::Refresh => {
