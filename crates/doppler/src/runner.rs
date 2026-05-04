@@ -27,7 +27,17 @@ pub struct TokioCommandRunner;
 #[async_trait::async_trait]
 impl CommandRunner for TokioCommandRunner {
     async fn run(&self, args: &[&str], cwd: Option<&Path>) -> io::Result<Output> {
-        let mut cmd = tokio::process::Command::new("doppler");
+        // Resolve the binary up front so we don't silently fail when the
+        // process inherits a stripped PATH (Finder-launched .app bundles
+        // sometimes get a minimal PATH that omits /opt/homebrew/bin and
+        // /usr/local/bin where Homebrew installs Doppler). Surface a real
+        // io::Error::NotFound if the binary is missing, instead of letting
+        // status polls return a generic "command not found" output.
+        let doppler_bin = which::which("doppler").map_err(|err| {
+            tracing::warn!("doppler CLI not found on PATH (try `brew install doppler`): {err}");
+            io::Error::new(io::ErrorKind::NotFound, err)
+        })?;
+        let mut cmd = tokio::process::Command::new(&doppler_bin);
         cmd.args(args);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
