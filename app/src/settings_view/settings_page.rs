@@ -22,6 +22,7 @@ use super::{
     teams_page::TeamsPageView,
     warp_drive_page::WarpDriveSettingsPageView,
     warpify_page::WarpifyPageView,
+    web_research_page::WebResearchPageView,
     SettingsSection,
 };
 use crate::{
@@ -120,6 +121,7 @@ pub enum SettingsPageViewHandle {
     BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
+    WebResearch(ViewHandle<WebResearchPageView>),
 }
 
 impl SettingsPageViewHandle {
@@ -143,6 +145,7 @@ impl SettingsPageViewHandle {
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
+            WebResearch(view_handle) => ChildView::new(view_handle).finish(),
         }
     }
 }
