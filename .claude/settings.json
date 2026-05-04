@@ -1,1 +1,20 @@
-{}
+{
+  "permissions": {
+    "allow": [
+      "Bash(node tools/web-research/bin/web-agent.mjs:*)",
+      "Bash(node tools/web-research/bin/deep-research.mjs:*)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -cr 'if ((.prompt // \"\") | test(\"\\\\b(deep research|research the web|web research|do research on|investigate online|research report)\\\\b\"; \"i\")) then {hookSpecificOutput: {hookEventName: \"UserPromptSubmit\", additionalContext: \"Hint: this prompt looks like web research. Use /web-agent (focused lookup) or /deep-research (multi-iteration report) — both wrap tools/web-research/bin/.\"}} else empty end'"
+          }
+        ]
+      }
+    ]
+  }
+}

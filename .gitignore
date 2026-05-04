@@ -58,3 +58,7 @@ desired_behavior.md
 
 # Don't include the python cache for bundled skills.
 __pycache__/
+
+# Local secrets and node_modules for the web-research tools
+tools/web-research/.env
+tools/web-research/node_modules/
