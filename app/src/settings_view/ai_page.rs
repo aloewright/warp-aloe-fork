@@ -3617,9 +3617,17 @@ impl SettingsWidget for GlobalAIWidget {
         let is_ai_disabled_due_to_remote_session_org_policy =
             AISettings::as_ref(app).is_ai_disabled_due_to_remote_session_org_policy(app);
 
+        // The "Sign up" CTA the legacy widget renders for anonymous users
+        // points at Warp's hosted account creation. The Helm fork's AI
+        // features (CLI agents, AI Gateway, helm-cloud) don't depend on a
+        // Warp account, so on the OSS build we always render the live
+        // toggle instead, regardless of Warp auth state.
+        #[cfg(feature = "warp_hosted")]
         let is_anonymous = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
+        #[cfg(not(feature = "warp_hosted"))]
+        let is_anonymous = false;
 
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)

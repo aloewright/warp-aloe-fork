@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 
 use crate::ai::request_usage_model::RequestLimitInfo;
+#[cfg(feature = "warp_hosted")]
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
 use crate::terminal::CLIAgent;
@@ -1574,13 +1575,21 @@ impl AISettings {
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
-        // Disable AI for anonymous and logged-out users.
-        let is_anonymous_or_logged_out = AuthStateProvider::as_ref(app)
+        // Helm fork (no `warp_hosted` feature): AI is available without a
+        // Warp account. CLI agents (Claude Code, Codex, Ollama) authenticate
+        // locally, and the AI Gateway / helm-cloud routing has its own auth
+        // separate from Warp's hosted control plane. Upstream Warp keeps the
+        // anonymous gate because its AI features dispatch through the hosted
+        // Warp backend, which requires a real account.
+        #[cfg(feature = "warp_hosted")]
+        let blocked_for_anonymous = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();
+        #[cfg(not(feature = "warp_hosted"))]
+        let blocked_for_anonymous = false;
 
         *self.is_any_ai_enabled
-            && !is_anonymous_or_logged_out
+            && !blocked_for_anonymous
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
     }
 

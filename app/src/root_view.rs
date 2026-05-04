@@ -1759,6 +1759,13 @@ impl RootView {
             cfg_if! {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
+                } else if #[cfg(not(feature = "warp_hosted"))] {
+                    // Helm OSS build: there is no Warp control plane to sign
+                    // into, and the AI features (CLI agents, AI Gateway,
+                    // helm-cloud) authenticate locally. Skip the welcome /
+                    // sign-in screen entirely and drop the user straight
+                    // into the workspace.
+                    AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
                 } else {
                     // When OpenWarpNewSettingsModes is enabled, show onboarding before login for
                     // users who haven't completed it yet (tracked via a local UserPreferences key).

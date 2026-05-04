@@ -11936,6 +11936,11 @@ impl TerminalView {
         self.is_login_shell_bootstrapped = true;
         self.hide_slow_bootstrap_banner(ctx);
 
+        // The "create a Warp account to use AI" banner only makes sense for
+        // builds whose AI features dispatch through Warp's hosted backend.
+        // The Helm fork routes through Cloudflare AI Gateway / helm-cloud
+        // and local CLI agents, none of which require a Warp account.
+        #[cfg(feature = "warp_hosted")]
         if self.auth_state.is_anonymous_or_logged_out()
             && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         {
