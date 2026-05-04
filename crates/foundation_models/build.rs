@@ -27,6 +27,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=swift/FoundationModelsBridge.swift");
+    println!("cargo:rerun-if-env-changed=FOUNDATION_MODELS_SKIP_SWIFT");
     // Declare our internal cfg so check-cfg doesn't warn on stable.
     println!("cargo:rustc-check-cfg=cfg(foundation_models_swift_skipped)");
 
@@ -91,12 +92,14 @@ fn main() {
                 archive_path.parent().unwrap().display()
             );
             println!("cargo:rustc-link-lib=static=FoundationModelsBridge");
-            // Swift static libraries depend on the Swift runtime. Link
-            // both the search path and an rpath entry so the dynamic
-            // loader can find `libswift_Concurrency.dylib` etc. at run
-            // time. (`/usr/lib/swift` ships with macOS itself.)
+            // Swift static libraries depend on the Swift runtime. We need
+            // the search path here so the linker can resolve `swiftCore`
+            // at link time. The runtime `-rpath` entry is set by the
+            // binary crate (`app/build.rs`) — `rustc-link-arg` from a
+            // library crate's build script is silently dropped by Cargo
+            // and would produce a binary without an rpath that resolves
+            // `@rpath/libswift_Concurrency.dylib`.
             println!("cargo:rustc-link-search=native=/usr/lib/swift");
-            println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
             println!("cargo:rustc-link-lib=dylib=swiftCore");
             // Foundation is required for `String`/`NSString` interop.
             println!("cargo:rustc-link-lib=framework=Foundation");

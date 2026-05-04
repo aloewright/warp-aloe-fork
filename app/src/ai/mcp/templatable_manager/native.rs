@@ -182,7 +182,7 @@ pub enum McpIntegration {
 /// Idempotent: a [`OnceLock`] guards the spawn so re-creating the
 /// manager (in tests, or across window-manager resets) does not start
 /// multiple subscribers.
-fn spawn_mcp_forwarder_subscriber() {
+fn spawn_mcp_forwarder_subscriber(ctx: &mut ModelContext<TemplatableMCPServerManager>) {
     use std::sync::OnceLock;
 
     static SUBSCRIBER_STARTED: OnceLock<()> = OnceLock::new();
@@ -193,30 +193,31 @@ fn spawn_mcp_forwarder_subscriber() {
     let forwarder = crate::ai::agent_sdk::driver::local_orchestrator::mcp_forwarder();
     let mut rx = forwarder.subscribe();
 
-    // Drive the receiver from a detached background task. The
-    // `watch::Receiver::changed` future resolves whenever the dispatcher
-    // calls `set_active` / `clear_active`. Errors only fire when the
-    // sender side is dropped, which never happens for the
+    // Drive the receiver from a detached background task on the app's
+    // executor. `tokio::spawn` would panic here — `TemplatableMCPServerManager::new`
+    // is called from `gpui` model construction, which has no Tokio runtime
+    // in scope. The `watch::Receiver::changed` future resolves whenever the
+    // dispatcher calls `set_active` / `clear_active`; errors only fire when
+    // the sender side is dropped, which never happens for the
     // `OnceLock`-anchored singleton.
-    tokio::spawn(async move {
-        loop {
-            // Read the current target before awaiting so the very first
-            // value (the `None` default at startup) is observed by any
-            // future fault-injection consumer.
-            let snapshot = rx.borrow_and_update().clone();
-            tracing::info!(
-                target: "warp::mcp::forwarder",
-                ?snapshot,
-                "McpForwarder target observed"
-            );
-            if rx.changed().await.is_err() {
-                // Sender dropped; the static can never be dropped during
-                // normal operation, so this branch only fires during
-                // process teardown. Exit cleanly.
-                return;
+    ctx.background_executor()
+        .spawn(async move {
+            loop {
+                // Read the current target before awaiting so the very first
+                // value (the `None` default at startup) is observed by any
+                // future fault-injection consumer.
+                let snapshot = rx.borrow_and_update().clone();
+                tracing::info!(
+                    target: "warp::mcp::forwarder",
+                    ?snapshot,
+                    "McpForwarder target observed"
+                );
+                if rx.changed().await.is_err() {
+                    return;
+                }
             }
-        }
-    });
+        })
+        .detach();
 }
 
 impl TemplatableMCPServerManager {
@@ -407,7 +408,7 @@ impl TemplatableMCPServerManager {
         // agent's per-turn execute context. The wiring satisfies the
         // PDX-105 acceptance criterion that production code outside
         // `crates/orchestrator/tests` references `McpForwarder`.
-        spawn_mcp_forwarder_subscriber();
+        spawn_mcp_forwarder_subscriber(ctx);
 
         me
     }

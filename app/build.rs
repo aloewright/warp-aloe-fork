@@ -34,6 +34,21 @@ fn main() -> Result<()> {
     if target_os == "macos" && target_family != "wasm" {
         println!("cargo:rustc-link-lib=framework=MetalKit");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
+
+        // Bake the Swift / framework rpaths into the binary at link time so
+        // raw `cargo bundle` produces a launchable binary without a post-step
+        // `install_name_tool -add_rpath`. Library crates (e.g.
+        // `foundation_models`) cannot inject `-rpath` into downstream
+        // binaries — Cargo's `rustc-link-arg` only applies to the emitting
+        // crate's own bins/cdylibs — so the binary crate has to do it.
+        //   * `/usr/lib/swift` — system Swift runtime; resolved via the dyld
+        //     shared cache on macOS 12+ (so `@rpath/libswift_Concurrency.dylib`
+        //     loads even though the file isn't on disk).
+        //   * `@executable_path/../Frameworks` — for libs we bundle (Sentry
+        //     today, Swift back-deploy libs if we ever need to ship them).
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+
         build_and_link_sentry();
 
         println!("cargo:rerun-if-changed=src/platform/mac/objc/app_bundle.h");
