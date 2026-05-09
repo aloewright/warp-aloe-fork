@@ -236,6 +236,28 @@ fn test_posix_escape() {
         shell_family.escape("foo '\"' bar"),
         "foo\\ \\'\\\"\\'\\ bar"
     );
+    assert_eq!(shell_family.escape("caret^car"), "caret\\^car");
+    assert_eq!(shell_family.escape("return\r"), "return\\\r");
+}
+
+#[test]
+fn test_applescript_escape() {
+    assert_eq!(
+        applescript_escape(r#"path\with\backslashes"#),
+        r#"path\\with\\backslashes"#
+    );
+    assert_eq!(
+        applescript_escape(r#"path "with" quotes"#),
+        r#"path \"with\" quotes"#
+    );
+    assert_eq!(
+        applescript_escape(r#"path \with "both""#),
+        r#"path \\with \"both\""#
+    );
+    assert_eq!(
+        applescript_escape(r#"" & do shell script "say hacked" & ""#),
+        r#"\" & do shell script \"say hacked\" & \""#
+    );
 }
 
 #[test]
