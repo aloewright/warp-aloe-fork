@@ -73,20 +73,39 @@ impl FuzzyMatchResult {
     }
 }
 
+thread_local! {
+    static MATCHER_SMART: SkimMatcherV2 = SkimMatcherV2::default();
+    static MATCHER_INSENSITIVE: SkimMatcherV2 = SkimMatcherV2::default().ignore_case();
+}
+
 /// Performs a fuzzy matching algorithm on text and query strings.
 /// If query contains no uppercase letters, then it will be insensitive to casing.
 /// If query does contain uppercase letters, then it will be case sensitive.
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default())
+    MATCHER_SMART.with(|matcher| {
+        matcher
+            .fuzzy_indices(text, query)
+            .map(|(score, indices)| FuzzyMatchResult {
+                score,
+                matched_indices: indices,
+            })
+    })
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings.
 /// Returns struct that contains the score of the match and a vector
 /// of matching byte indices.
 pub fn match_indices_case_insensitive(text: &str, query: &str) -> Option<FuzzyMatchResult> {
-    match_internal(text, query, SkimMatcherV2::default().ignore_case())
+    MATCHER_INSENSITIVE.with(|matcher| {
+        matcher
+            .fuzzy_indices(text, query)
+            .map(|(score, indices)| FuzzyMatchResult {
+                score,
+                matched_indices: indices,
+            })
+    })
 }
 
 /// Performs a case insensitive fuzzy matching algorithm on text and query strings,
@@ -109,6 +128,14 @@ pub fn match_indices_case_insensitive_ignore_spaces(
     text: &str,
     query: &str,
 ) -> Option<FuzzyMatchResult> {
+    // Fast path: if the query has no whitespace, match it directly
+    if !query.chars().any(|c| c.is_whitespace()) {
+        if query.is_empty() {
+            return None;
+        }
+        return match_indices_case_insensitive(text, query);
+    }
+
     // Remove all spaces from the query
     let query_no_spaces: String = query.chars().filter(|c| !c.is_whitespace()).collect();
 
@@ -118,21 +145,7 @@ pub fn match_indices_case_insensitive_ignore_spaces(
     }
 
     // Perform the fuzzy match with the space-stripped query
-    match_internal(
-        text,
-        &query_no_spaces,
-        SkimMatcherV2::default().ignore_case(),
-    )
-}
-
-fn match_internal(text: &str, query: &str, matcher: SkimMatcherV2) -> Option<FuzzyMatchResult> {
-    matcher
-        // The fuzzy_indices API returns char indices, so we don't need to manually convert.
-        .fuzzy_indices(text, query)
-        .map(|(score, indices)| FuzzyMatchResult {
-            score,
-            matched_indices: indices,
-        })
+    match_indices_case_insensitive(text, &query_no_spaces)
 }
 
 /// Checks if a query contains wildcard characters (* or ?).

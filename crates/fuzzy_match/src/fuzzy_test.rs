@@ -371,3 +371,33 @@ fn test_ignore_spaces_single_word_query() {
     );
     assert_eq!(regular_result.score, space_ignoring_result.score);
 }
+
+#[test]
+fn bench_ignore_spaces() {
+    let text = "calculateSumOfSquares";
+    let query = "calc sum";
+
+    let iterations = 100_000;
+
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        let _ = match_indices_case_insensitive_ignore_spaces(text, query);
+    }
+    let duration = start.elapsed();
+
+    println!(
+        "OLD: Time for {} iterations: {:?}",
+        iterations, duration
+    );
+
+    let query_no_space = "calcsum";
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        let _ = match_indices_case_insensitive_ignore_spaces(text, query_no_space);
+    }
+    let duration = start.elapsed();
+    println!(
+        "FAST PATH: Time for {} iterations: {:?}",
+        iterations, duration
+    );
+}
