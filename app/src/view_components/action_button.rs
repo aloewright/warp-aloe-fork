@@ -21,6 +21,7 @@ use warpui::{
     AppContext, BlurContext, Element, Entity, EventContext, FocusContext, SingletonEntity as _,
     TypedActionView, View, ViewContext,
 };
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 
 use crate::{
     settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
@@ -90,6 +91,9 @@ pub struct ActionButton {
 
     /// If true, renders the keybinding before the label (but after the icon).
     keybinding_before_label: bool,
+
+    /// An optional label to use for accessibility (e.g. screen readers).
+    accessibility_label: Option<String>,
 }
 
 pub type ClickHandler = Box<dyn Fn(&mut EventContext) + 'static>;
@@ -242,6 +246,7 @@ impl ActionButton {
             adjoined_side: None,
             compact_keybinding: false,
             keybinding_before_label: false,
+            accessibility_label: None,
         }
     }
 
@@ -307,6 +312,12 @@ impl ActionButton {
     /// Renders the keybinding before the label (but after the icon).
     pub fn with_keybinding_before_label(mut self, before_label: bool) -> Self {
         self.keybinding_before_label = before_label;
+        self
+    }
+
+    /// Set the accessibility label for this button.
+    pub fn with_accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -477,6 +488,15 @@ impl ActionButton {
         ctx.notify();
     }
 
+    pub fn set_accessibility_label(
+        &mut self,
+        label: Option<impl Into<String>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.accessibility_label = label.map(|l| l.into());
+        ctx.notify();
+    }
+
     /// Set up a new keybinding associated with this button. The caller is responsible for resetting
     /// any previous keybinding state.
     fn setup_keybinding(&mut self, source: KeystrokeSource, ctx: &mut ViewContext<Self>) {
@@ -629,6 +649,22 @@ impl Entity for ActionButton {
 impl View for ActionButton {
     fn ui_name() -> &'static str {
         "ActionButton"
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        let label = self
+            .accessibility_label
+            .clone()
+            .or_else(|| {
+                if !self.label.is_empty() {
+                    Some(self.label.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| self.tooltip.clone());
+
+        label.map(|label| AccessibilityContent::new_without_help(label, WarpA11yRole::ButtonRole))
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
