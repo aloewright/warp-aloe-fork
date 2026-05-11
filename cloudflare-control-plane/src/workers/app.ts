@@ -15,6 +15,7 @@
  *     GET  /api/environments
  *     POST /api/onboarding/check
  *     GET  /api/resources
+ *     POST /api/audit/sync
  *     POST /api/workflows/:slug/instances
  *     POST /api/workflows/deploy/instances/:id/approve
  *     GET  /api/workflows/:slug/instances/:id
@@ -489,6 +490,7 @@ export function createApp(): Hono<AppEnv> {
   app.use("/api/environments", helmAuth, audit());
   app.use("/api/onboarding/check", helmAuth, audit());
   app.use("/api/resources", helmAuth, audit());
+  app.use("/api/audit/*", helmAuth, audit());
   app.use("/api/workflows/*", helmAuth, audit());
   app.use("/api/sessions/*", helmAuth, audit());
   app.use("/api/workspaces/*", helmAuth, audit());
@@ -571,7 +573,7 @@ export function createApp(): Hono<AppEnv> {
   // dashboard, soak harness inspector). Authenticated like other protected
   // surfaces — `audit({})` middleware writes its own attribution row, and
   // the handler is responsible for parameterised insert.
-  app.post("/api/audit/sync", async (c) => {
+  app.post("/api/audit/sync", (c) => {
     return handleAuditSync(c.req.raw, c.env as ControlPlaneEnv);
   });
 
