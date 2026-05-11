@@ -113,10 +113,29 @@ export function isProtectedResource(
   return false;
 }
 
+/**
+ * Module-level cache for the parsed manifest (PDX-19).
+ *
+ * Parsing and validating the manifest with Zod on every request (via the
+ * helmAuth middleware) is expensive. We cache the parsed object keyed by
+ * the raw JSON string so we only pay the validation cost when the
+ * environment actually changes (e.g. during a deploy or in tests).
+ */
+let cachedManifestJson: string | null = null;
+let cachedManifest: HelmManifest | null = null;
+
 export function manifestForRuntime(env: { HELM_MANIFEST_JSON?: string }): HelmManifest {
   const json = env.HELM_MANIFEST_JSON;
   if (!json) {
     throw new Error("HELM_MANIFEST_JSON is required for runtime manifest-backed APIs.");
   }
-  return parseManifestJson(json);
+
+  if (json === cachedManifestJson && cachedManifest) {
+    return cachedManifest;
+  }
+
+  const manifest = parseManifestJson(json);
+  cachedManifestJson = json;
+  cachedManifest = manifest;
+  return manifest;
 }

@@ -1,0 +1,3 @@
+## 2026-05-11 - Memoization of manifest parsing in Cloudflare Workers
+**Learning:** In Cloudflare Workers, module-level variables persist across requests within the same isolate. Repeatedly parsing and validating large configuration objects (like the manifest) from environment variables using Zod is an expensive operation that can significantly increase per-request latency, especially when called from middleware like `helmAuth`.
+**Action:** Always memoize the parsing and validation of large environment-backed configuration objects at the module level. Use the raw string value as a cache key to ensure safe invalidation if the environment changes during development or testing.
