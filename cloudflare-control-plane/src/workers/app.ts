@@ -571,7 +571,7 @@ export function createApp(): Hono<AppEnv> {
   // dashboard, soak harness inspector). Authenticated like other protected
   // surfaces — `audit({})` middleware writes its own attribution row, and
   // the handler is responsible for parameterised insert.
-  app.post("/api/audit/sync", async (c) => {
+  app.post("/api/audit/sync", helmAuth, audit(), async (c) => {
     return handleAuditSync(c.req.raw, c.env as ControlPlaneEnv);
   });
 
