@@ -113,10 +113,22 @@ export function isProtectedResource(
   return false;
 }
 
+let cachedManifest: HelmManifest | null = null;
+
+/**
+ * Extract and parse the Helm manifest from the environment.
+ *
+ * PDX-23 optimization: Parse and validate the manifest once per isolate.
+ * Since HELM_MANIFEST_JSON is a static environment variable, memoizing
+ * it here avoids the O(N) cost of Zod validation on every request.
+ */
 export function manifestForRuntime(env: { HELM_MANIFEST_JSON?: string }): HelmManifest {
+  if (cachedManifest) return cachedManifest;
+
   const json = env.HELM_MANIFEST_JSON;
   if (!json) {
     throw new Error("HELM_MANIFEST_JSON is required for runtime manifest-backed APIs.");
   }
-  return parseManifestJson(json);
+  cachedManifest = parseManifestJson(json);
+  return cachedManifest;
 }
