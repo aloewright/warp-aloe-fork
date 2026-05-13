@@ -489,6 +489,7 @@ export function createApp(): Hono<AppEnv> {
   app.use("/api/environments", helmAuth, audit());
   app.use("/api/onboarding/check", helmAuth, audit());
   app.use("/api/resources", helmAuth, audit());
+  app.use("/api/audit/*", helmAuth, audit());
   app.use("/api/workflows/*", helmAuth, audit());
   app.use("/api/sessions/*", helmAuth, audit());
   app.use("/api/workspaces/*", helmAuth, audit());
