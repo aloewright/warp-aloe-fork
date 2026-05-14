@@ -113,10 +113,17 @@ export function isProtectedResource(
   return false;
 }
 
+let cachedManifest: { json: string; manifest: HelmManifest } | null = null;
+
 export function manifestForRuntime(env: { HELM_MANIFEST_JSON?: string }): HelmManifest {
   const json = env.HELM_MANIFEST_JSON;
   if (!json) {
     throw new Error("HELM_MANIFEST_JSON is required for runtime manifest-backed APIs.");
   }
-  return parseManifestJson(json);
+  if (cachedManifest?.json === json) {
+    return cachedManifest.manifest;
+  }
+  const manifest = parseManifestJson(json);
+  cachedManifest = { json, manifest };
+  return manifest;
 }

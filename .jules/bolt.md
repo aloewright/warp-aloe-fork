@@ -1,0 +1,3 @@
+## 2025-05-15 - Request Lifecycle Optimizations in Cloudflare Workers
+**Learning:** In the Cloudflare Worker isolate environment, expensive operations like JSON parsing/Zod validation of environment variables and Drizzle client initialization should be memoized at the module level to avoid redundant work across requests. Furthermore, non-essential operations like audit logging can be moved out of the critical path using `waitUntil` to significantly reduce user-facing latency.
+**Action:** Always check for module-level memoization opportunities for stable environment configurations and use `waitUntil` for background tasks that don't need to block the response.

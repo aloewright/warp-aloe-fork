@@ -258,24 +258,32 @@ function audit(opts: { anonymous?: boolean } = {}) {
       );
     }
     const status = c.res?.status ?? 200;
+    const auditPromise = (async () => {
+      try {
+        await getDb(c.env).insert(auditLog).values({
+          id: crypto.randomUUID(),
+          userId: ctx.userId,
+          action: "http.request",
+          targetKind: "endpoint",
+          targetId: url.pathname,
+          details: {
+            method: c.req.method,
+            path: url.pathname,
+            status,
+            durationMs: Date.now() - startedAt,
+            source: ctx.source,
+            ...(ctx.scope ? { scope: ctx.scope } : {})
+          }
+        });
+      } catch {
+        // Audit failures must not break the request path.
+      }
+    })();
     try {
-      await getDb(c.env).insert(auditLog).values({
-        id: crypto.randomUUID(),
-        userId: ctx.userId,
-        action: "http.request",
-        targetKind: "endpoint",
-        targetId: url.pathname,
-        details: {
-          method: c.req.method,
-          path: url.pathname,
-          status,
-          durationMs: Date.now() - startedAt,
-          source: ctx.source,
-          ...(ctx.scope ? { scope: ctx.scope } : {})
-        }
-      });
+      c.executionCtx.waitUntil(auditPromise);
     } catch {
-      // Audit failures must not break the request path.
+      // If executionCtx.waitUntil is not available (e.g. in some test environments),
+      // we still want the request to succeed. We've already started the promise.
     }
     if (threw && !c.res) throw threw;
   };
