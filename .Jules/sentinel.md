@@ -1,0 +1,4 @@
+## 2025-05-15 - Unprotected Audit Log Sync Endpoint
+**Vulnerability:** The `/api/audit/sync` endpoint in the Cloudflare Control Plane was entirely unprotected, allowing unauthenticated users to inject arbitrary audit logs into the D1 database. It also lacked a batch size limit, posing a DoS risk.
+**Learning:** Security middleware (`helmAuth` and `audit()`) must be explicitly applied to every sensitive route in Hono. Relying on path-prefix matching (e.g., `app.use("/api/workflows/*", ...)`) is effective only if all sensitive routes share those prefixes.
+**Prevention:** Use a 'deny-by-default' approach for new routes. Implement a regression test for sensitive endpoints to ensure they always require authentication. Add explicit resource limits (like `MAX_AUDIT_BATCH_SIZE`) to all endpoints accepting batch data.

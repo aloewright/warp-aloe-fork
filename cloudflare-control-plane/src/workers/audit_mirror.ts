@@ -36,6 +36,9 @@ export interface AuditMirrorEnv {
   HELM_AUDIT_DB?: D1Database;
 }
 
+/** Maximum number of audit rows allowed in a single batch (DoS prevention). */
+export const MAX_AUDIT_BATCH_SIZE = 500;
+
 /** Single audit-log row, matching the JSONL shape from PDX-28. */
 export interface AuditLogRow {
   timestamp: string;
@@ -170,6 +173,16 @@ export async function handleAuditSync(
   if (!Array.isArray(body)) {
     return json(
       { error: "expected_array", message: "Body must be a JSON array of audit rows." },
+      { status: 400 }
+    );
+  }
+
+  if (body.length > MAX_AUDIT_BATCH_SIZE) {
+    return json(
+      {
+        error: "batch_too_large",
+        message: `Batch size exceeds maximum of ${MAX_AUDIT_BATCH_SIZE} rows.`
+      },
       { status: 400 }
     );
   }
