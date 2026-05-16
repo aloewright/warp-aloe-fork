@@ -493,6 +493,7 @@ export function createApp(): Hono<AppEnv> {
   app.use("/api/sessions/*", helmAuth, audit());
   app.use("/api/workspaces/*", helmAuth, audit());
   app.use("/api/runs/*", helmAuth, audit());
+  app.use("/api/audit/*", helmAuth, audit());
 
   app.get("/api/environments", (c) => {
     const manifest = manifestForRuntime(c.env);
