@@ -253,30 +253,33 @@ function audit(opts: { anonymous?: boolean } = {}) {
     } catch (err) {
       threw = err;
       c.res = json(
-        { error: "internal_error", message: (err as Error).message },
+        { error: "internal_error", message: "An unexpected error occurred." },
         { status: 500 }
       );
     }
     const status = c.res?.status ?? 200;
-    try {
-      await getDb(c.env).insert(auditLog).values({
-        id: crypto.randomUUID(),
-        userId: ctx.userId,
-        action: "http.request",
-        targetKind: "endpoint",
-        targetId: url.pathname,
-        details: {
-          method: c.req.method,
-          path: url.pathname,
-          status,
-          durationMs: Date.now() - startedAt,
-          source: ctx.source,
-          ...(ctx.scope ? { scope: ctx.scope } : {})
-        }
-      });
-    } catch {
-      // Audit failures must not break the request path.
-    }
+    const writeAudit = async () => {
+      try {
+        await getDb(c.env).insert(auditLog).values({
+          id: crypto.randomUUID(),
+          userId: ctx.userId,
+          action: "http.request",
+          targetKind: "endpoint",
+          targetId: url.pathname,
+          details: {
+            method: c.req.method,
+            path: url.pathname,
+            status,
+            durationMs: Date.now() - startedAt,
+            source: ctx.source,
+            ...(ctx.scope ? { scope: ctx.scope } : {})
+          }
+        });
+      } catch {
+        // Audit failures must not break the request path.
+      }
+    };
+    c.executionCtx.waitUntil(writeAudit());
     if (threw && !c.res) throw threw;
   };
 }
