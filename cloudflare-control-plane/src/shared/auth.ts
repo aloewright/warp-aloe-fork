@@ -441,19 +441,28 @@ export async function recordAuthEvent<E extends DbEnv>(
     action: string;
     jti: string;
     details?: Record<string, unknown>;
-  }
+  },
+  ctx?: { waitUntil: (p: Promise<unknown>) => void }
 ): Promise<void> {
-  try {
-    await getDb(env).insert(auditLog).values({
-      id: crypto.randomUUID(),
-      userId: args.userId,
-      action: args.action,
-      targetKind: "jwt",
-      targetId: args.jti,
-      details: args.details ?? null
-    });
-  } catch {
-    // Audit failure must not break sign-in / sign-out.
+  const promise = (async () => {
+    try {
+      await getDb(env).insert(auditLog).values({
+        id: crypto.randomUUID(),
+        userId: args.userId,
+        action: args.action,
+        targetKind: "jwt",
+        targetId: args.jti,
+        details: args.details ?? null
+      });
+    } catch {
+      // Audit failure must not break sign-in / sign-out.
+    }
+  })();
+
+  if (ctx) {
+    ctx.waitUntil(promise);
+  } else {
+    await promise;
   }
 }
 

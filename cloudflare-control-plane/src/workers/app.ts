@@ -258,25 +258,31 @@ function audit(opts: { anonymous?: boolean } = {}) {
       );
     }
     const status = c.res?.status ?? 200;
-    try {
-      await getDb(c.env).insert(auditLog).values({
-        id: crypto.randomUUID(),
-        userId: ctx.userId,
-        action: "http.request",
-        targetKind: "endpoint",
-        targetId: url.pathname,
-        details: {
-          method: c.req.method,
-          path: url.pathname,
-          status,
-          durationMs: Date.now() - startedAt,
-          source: ctx.source,
-          ...(ctx.scope ? { scope: ctx.scope } : {})
-        }
-      });
-    } catch {
-      // Audit failures must not break the request path.
-    }
+    const auditPromise = (async () => {
+      try {
+        await getDb(c.env).insert(auditLog).values({
+          id: crypto.randomUUID(),
+          userId: ctx.userId,
+          action: "http.request",
+          targetKind: "endpoint",
+          targetId: url.pathname,
+          details: {
+            method: c.req.method,
+            path: url.pathname,
+            status,
+            durationMs: Date.now() - startedAt,
+            source: ctx.source,
+            ...(ctx.scope ? { scope: ctx.scope } : {})
+          }
+        });
+      } catch {
+        // Audit failures must not break the request path.
+      }
+    })();
+
+    // Performance (Bolt ⚡): Move audit logging out of the critical request path.
+    c.executionCtx.waitUntil(auditPromise);
+
     if (threw && !c.res) throw threw;
   };
 }
@@ -342,7 +348,7 @@ export function createApp(): Hono<AppEnv> {
         action: "auth.session.issued",
         jti: issued.payload.jti,
         details: { ip, user_agent: userAgent, source: "access" }
-      });
+      }, c.executionCtx);
       return c.json({
         token: issued.token,
         expiresAt: issued.payload.exp,
@@ -377,7 +383,7 @@ export function createApp(): Hono<AppEnv> {
             project: validation.project,
             source: "doppler"
           }
-        });
+        }, c.executionCtx);
         return c.json({
           token: issued.token,
           expiresAt: issued.payload.exp,
@@ -419,7 +425,7 @@ export function createApp(): Hono<AppEnv> {
       action: "auth.session.revoked",
       jti: result.payload.jti,
       details: { source: result.payload.scope ? "doppler" : "helm" }
-    });
+    }, c.executionCtx);
     return c.json({ revoked: true, jti: result.payload.jti });
   });
 
@@ -888,7 +894,7 @@ async function handleCreateShare(
     targetId,
     permission,
     sharedWith: isPublic ? "public" : recipientUserId
-  });
+  }, c.executionCtx);
   await broadcastShareGranted(env, recipientUserId, {
     shareId: row.id,
     kind,
@@ -1003,7 +1009,7 @@ async function handleRevokeShare(
     shareId: row.id,
     kind,
     targetId
-  });
+  }, c.executionCtx);
 
   return c.json({ revoked: true, shareId: row.id });
 }
