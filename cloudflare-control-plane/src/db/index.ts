@@ -35,12 +35,22 @@ export interface DbEnv {
 /** A Drizzle client typed against the full Helm schema. */
 export type HelmDb = DrizzleD1Database<typeof schema>;
 
+/** Module-level cache for the Drizzle client to avoid redundant instantiation. */
+const DB_CACHE = new WeakMap<D1Database, HelmDb>();
+
 /**
  * Build a Drizzle client backed by `env.DB` (the D1 binding declared in
  * `wrangler.control-plane.toml`). Cheap to call per-request.
  */
 export function getDb(env: DbEnv): HelmDb {
-  return drizzle(env.DB, { schema });
+  // Memoize the Drizzle client per D1 binding instance to avoid redundant
+  // setup costs (validation, schema parsing) on every call.
+  let db = DB_CACHE.get(env.DB);
+  if (!db) {
+    db = drizzle(env.DB, { schema });
+    DB_CACHE.set(env.DB, db);
+  }
+  return db;
 }
 
 export * as schemaNs from "./schema.js";
