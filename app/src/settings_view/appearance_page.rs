@@ -4758,6 +4758,8 @@ fn build_directory_delete_buttons(
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::X)
                     .with_size(ButtonSize::XSmall)
+                    .with_tooltip("Remove directory color")
+                    .with_accessibility_label(format!("Remove directory color for {dir_path}"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(
                             AppearancePageAction::RemoveDefaultDirectoryTabColor {
