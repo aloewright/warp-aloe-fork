@@ -9,6 +9,7 @@ use warp_core::ui::{
 use warpui::{elements::MainAxisAlignment, Gradient};
 use warpui::{elements::MainAxisSize, text_layout::ClipConfig};
 use warpui::{
+    accessibility::{AccessibilityContent, WarpA11yRole},
     elements::{
         Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
         Hoverable, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement as _,
@@ -90,6 +91,9 @@ pub struct ActionButton {
 
     /// If true, renders the keybinding before the label (but after the icon).
     keybinding_before_label: bool,
+
+    /// Descriptive label for screen readers.
+    accessibility_label: Option<String>,
 }
 
 pub type ClickHandler = Box<dyn Fn(&mut EventContext) + 'static>;
@@ -242,12 +246,19 @@ impl ActionButton {
             adjoined_side: None,
             compact_keybinding: false,
             keybinding_before_label: false,
+            accessibility_label: None,
         }
     }
 
     // `with_*` methods are for chained configuration when first creating an ActionButton.
     // They consume `self`, and can only be called before the ActionButton view has been added to
     // the UI framework (thus, no ctx.notify).
+
+    /// Set the descriptive label for screen readers.
+    pub fn with_accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
 
     /// Set the icon shown to the left of this button.
     pub fn with_icon(mut self, icon: Icon) -> Self {
@@ -424,6 +435,15 @@ impl ActionButton {
 
     pub fn set_label(&mut self, label: impl Into<Cow<'static, str>>, ctx: &mut ViewContext<Self>) {
         self.label = label.into();
+        ctx.notify();
+    }
+
+    pub fn set_accessibility_label(
+        &mut self,
+        label: Option<impl Into<String>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.accessibility_label = label.map(|l| l.into());
         ctx.notify();
     }
 
@@ -643,6 +663,25 @@ impl View for ActionButton {
             self.focused = false;
             ctx.notify();
         }
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        let value = self
+            .accessibility_label
+            .clone()
+            .or_else(|| {
+                if !self.label.is_empty() {
+                    Some(self.label.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| self.tooltip.clone())?;
+
+        Some(AccessibilityContent::new_without_help(
+            value,
+            WarpA11yRole::ButtonRole,
+        ))
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
