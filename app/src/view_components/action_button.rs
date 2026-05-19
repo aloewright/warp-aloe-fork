@@ -14,6 +14,7 @@ use warpui::{
         Hoverable, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement as _,
         ParentOffsetBounds, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
     },
+    accessibility::{AccessibilityContent, WarpA11yRole},
     fonts::{Properties, Weight},
     keymap::Keystroke,
     platform::Cursor,
@@ -90,6 +91,9 @@ pub struct ActionButton {
 
     /// If true, renders the keybinding before the label (but after the icon).
     keybinding_before_label: bool,
+
+    /// An explicit accessibility label to be read by screen readers.
+    accessibility_label: Option<String>,
 }
 
 pub type ClickHandler = Box<dyn Fn(&mut EventContext) + 'static>;
@@ -139,6 +143,38 @@ pub trait ActionButtonTheme {
 
     fn font_properties(&self) -> Option<Properties> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use warpui::AppContext;
+
+    #[test]
+    fn test_action_button_accessibility_contents() {
+        let app = AppContext::mock();
+
+        // 1. Explicit accessibility label
+        let button = ActionButton::new("Visual Label", NakedTheme)
+            .with_accessibility_label("A11y Label")
+            .with_tooltip("Tooltip");
+        let contents = button.accessibility_contents(&app).unwrap();
+        assert_eq!(contents.value, "A11y Label");
+
+        // 2. Fallback to visual label
+        let button = ActionButton::new("Visual Label", NakedTheme).with_tooltip("Tooltip");
+        let contents = button.accessibility_contents(&app).unwrap();
+        assert_eq!(contents.value, "Visual Label");
+
+        // 3. Fallback to tooltip
+        let button = ActionButton::new("", NakedTheme).with_tooltip("Tooltip");
+        let contents = button.accessibility_contents(&app).unwrap();
+        assert_eq!(contents.value, "Tooltip");
+
+        // 4. None if all empty
+        let button = ActionButton::new("", NakedTheme);
+        assert!(button.accessibility_contents(&app).is_none());
     }
 }
 
@@ -242,6 +278,7 @@ impl ActionButton {
             adjoined_side: None,
             compact_keybinding: false,
             keybinding_before_label: false,
+            accessibility_label: None,
         }
     }
 
@@ -307,6 +344,12 @@ impl ActionButton {
     /// Renders the keybinding before the label (but after the icon).
     pub fn with_keybinding_before_label(mut self, before_label: bool) -> Self {
         self.keybinding_before_label = before_label;
+        self
+    }
+
+    /// Sets the accessibility label for this button.
+    pub fn with_accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -456,6 +499,11 @@ impl ActionButton {
         ctx: &mut ViewContext<Self>,
     ) {
         self.disabled_theme = Some(Arc::new(disabled_theme));
+        ctx.notify();
+    }
+
+    pub fn set_accessibility_label(&mut self, label: Option<String>, ctx: &mut ViewContext<Self>) {
+        self.accessibility_label = label;
         ctx.notify();
     }
 
@@ -643,6 +691,25 @@ impl View for ActionButton {
             self.focused = false;
             ctx.notify();
         }
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        let label = self
+            .accessibility_label
+            .clone()
+            .or_else(|| {
+                if !self.label.is_empty() {
+                    Some(self.label.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| self.tooltip.clone())?;
+
+        Some(AccessibilityContent::new_without_help(
+            label,
+            WarpA11yRole::ButtonRole,
+        ))
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
