@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use command::blocking::Command;
 use warp_core::channel::ChannelState;
-use warp_util::path::ShellFamily;
+use warp_util::path::applescript_escape;
 
 /// Compute the target path where the symlink should be installed, based on channel
 fn cli_install_target_path() -> PathBuf {
@@ -24,12 +24,13 @@ fn create_symlink_with_admin(source: &Path, target: &Path) -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow!("Target path contains invalid UTF-8: {target:?}"))?;
 
-    let escaped_source = ShellFamily::Posix.shell_escape(source_str);
-    let escaped_target = ShellFamily::Posix.shell_escape(target_str);
+    let escaped_source = applescript_escape(source_str);
+    let escaped_target = applescript_escape(target_str);
 
-    // Use osascript to run the ln command with admin privileges, with a custom prompt
+    // Use osascript to run the ln command with admin privileges, with a custom prompt.
+    // We use `quoted form of` in AppleScript to safely handle parameters passed to the shell.
     let script = format!(
-        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"Warp needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
+        "do shell script \"ln -sf \" & quoted form of \"{escaped_source}\" & \" \" & quoted form of \"{escaped_target}\" with prompt \"Warp needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
     );
 
     log::debug!("Creating symlink with admin privileges");
@@ -62,10 +63,12 @@ fn remove_file_with_admin(target: &Path) -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow!("Target path contains invalid UTF-8: {target:?}"))?;
 
-    let escaped_target = ShellFamily::Posix.shell_escape(target_str);
+    let escaped_target = applescript_escape(target_str);
 
+    // Use osascript to run the rm command with admin privileges, with a custom prompt.
+    // We use `quoted form of` in AppleScript to safely handle parameters passed to the shell.
     let script = format!(
-        "do shell script \"rm {escaped_target}\" with prompt \"Warp needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
+        "do shell script \"rm \" & quoted form of \"{escaped_target}\" with prompt \"Warp needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
     );
 
     log::debug!("Removing file with admin privileges");

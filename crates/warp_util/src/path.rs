@@ -24,7 +24,7 @@ lazy_static! {
     /// Special characters to escape in POSIX-based shells. Check for the full list here:
     /// https://mywiki.wooledge.org/BashGuide/SpecialCharacters
     static ref POSIX_SHELL_ESCAPE_PATTERN: Regex =
-        Regex::new(r#"([ "\$'\\#=\[\]!><|;{}()\*\?&`~]|\n|\t)"#).expect("Shell escape regex should be valid");
+        Regex::new(r#"([ "\$'\\#=\[\]!><|;{}()\*\?&`~^]|\n|\t|\r)"#).expect("Shell escape regex should be valid");
 
     /// Special characters to escape in PowerShell. Mostly the same as [`POSIX_SHELL_ESCAPE_PATTERN`]
     /// but with the following differences:
@@ -283,6 +283,13 @@ impl ShellFamily {
         }
         self.escape(path)
     }
+}
+
+/// Escapes a string for use within an AppleScript string literal.
+///
+/// This escapes double quotes and backslashes by prepending a backslash.
+pub fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Returns `true` iff the given string is a valid POSIX portable pathname.
