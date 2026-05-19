@@ -183,6 +183,35 @@ describe("control-plane Hono app", () => {
       expect(res.status).toBe(401);
     });
 
+    it("rejects unauthenticated requests to /api/audit/sync", async () => {
+      const app = createApp();
+      const res = await app.fetch(
+        new Request("https://h/api/audit/sync", { method: "POST", body: "[]" }),
+        buildEnv(),
+        noopCtx
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("accepts a helm JWT for /api/audit/sync (but fails with 503 if DB unbound)", async () => {
+      const app = createApp();
+      const issued = await issueHelmJwt({ userId: "user-1", signingKey: SIGNING_KEY });
+      const res = await app.fetch(
+        new Request("https://h/api/audit/sync", {
+          method: "POST",
+          body: "[]",
+          headers: {
+            Authorization: `Bearer ${issued.token}`,
+            "Content-Type": "application/json"
+          }
+        }),
+        buildEnv(),
+        noopCtx
+      );
+      // Reached the handler, but buildEnv doesn't set HELM_AUDIT_DB yet.
+      expect(res.status).toBe(503);
+    });
+
     it("accepts a helm JWT via Authorization header", async () => {
       const app = createApp();
       const issued = await issueHelmJwt({ userId: "user-1", signingKey: SIGNING_KEY });
