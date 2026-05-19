@@ -17,6 +17,7 @@ use warpui::{
     fonts::{Properties, Weight},
     keymap::Keystroke,
     platform::Cursor,
+    accessibility::{AccessibilityContent, WarpA11yRole},
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, BlurContext, Element, Entity, EventContext, FocusContext, SingletonEntity as _,
     TypedActionView, View, ViewContext,
@@ -90,6 +91,9 @@ pub struct ActionButton {
 
     /// If true, renders the keybinding before the label (but after the icon).
     keybinding_before_label: bool,
+
+    /// Optional accessibility label for the button.
+    accessibility_label: Option<Cow<'static, str>>,
 }
 
 pub type ClickHandler = Box<dyn Fn(&mut EventContext) + 'static>;
@@ -242,6 +246,7 @@ impl ActionButton {
             adjoined_side: None,
             compact_keybinding: false,
             keybinding_before_label: false,
+            accessibility_label: None,
         }
     }
 
@@ -362,6 +367,11 @@ impl ActionButton {
         self
     }
 
+    pub fn with_accessibility_label(mut self, label: impl Into<Cow<'static, str>>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
     pub fn with_max_label_width(mut self, max_label_width: f32) -> Self {
         self.max_label_width = Some(max_label_width);
         self
@@ -438,6 +448,15 @@ impl ActionButton {
         ctx: &mut ViewContext<Self>,
     ) {
         self.tooltip_sublabel = tooltip_sublabel.map(|t| t.into());
+        ctx.notify();
+    }
+
+    pub fn set_accessibility_label(
+        &mut self,
+        label: impl Into<Cow<'static, str>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.accessibility_label = Some(label.into());
         ctx.notify();
     }
 
@@ -643,6 +662,18 @@ impl View for ActionButton {
             self.focused = false;
             ctx.notify();
         }
+    }
+
+    fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
+        let label = if let Some(accessibility_label) = self.accessibility_label.as_ref() {
+            Some(accessibility_label.to_string())
+        } else if !self.label.is_empty() {
+            Some(self.label.to_string())
+        } else {
+            self.tooltip.clone()
+        };
+
+        label.map(|label| AccessibilityContent::new_without_help(label, WarpA11yRole::ButtonRole))
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
