@@ -67,16 +67,20 @@ export function isAuditLogRow(value: unknown): value is AuditLogRow {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.timestamp !== "string" || v.timestamp.length === 0) return false;
-  for (const key of [
-    "task_id",
-    "agent_id",
-    "rule",
-    "action",
-    "offending_path",
-    "detail"
-  ]) {
-    if (v[key] !== undefined && typeof v[key] !== "string") return false;
+
+  // Defense-in-depth: enforce maximum string lengths for all well-known fields
+  // to prevent DoS via excessive storage or memory usage.
+  for (const key of ["task_id", "agent_id", "rule", "action", "offending_path"]) {
+    const val = v[key];
+    if (val !== undefined) {
+      if (typeof val !== "string" || val.length > 256) return false;
+    }
   }
+
+  if (v.detail !== undefined) {
+    if (typeof v.detail !== "string" || v.detail.length > 4096) return false;
+  }
+
   return true;
 }
 

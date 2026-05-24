@@ -253,12 +253,12 @@ function audit(opts: { anonymous?: boolean } = {}) {
     } catch (err) {
       threw = err;
       c.res = json(
-        { error: "internal_error", message: (err as Error).message },
+        { error: "internal_error", message: "An unexpected error occurred." },
         { status: 500 }
       );
     }
     const status = c.res?.status ?? 200;
-    const auditPromise = (async () => {
+    const writeAudit = async () => {
       try {
         await getDb(c.env).insert(auditLog).values({
           id: crypto.randomUUID(),
@@ -278,11 +278,8 @@ function audit(opts: { anonymous?: boolean } = {}) {
       } catch {
         // Audit failures must not break the request path.
       }
-    })();
-
-    // Performance (Bolt ⚡): Move audit logging out of the critical request path.
-    c.executionCtx.waitUntil(auditPromise);
-
+    };
+    c.executionCtx.waitUntil(writeAudit());
     if (threw && !c.res) throw threw;
   };
 }
