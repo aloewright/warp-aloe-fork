@@ -346,7 +346,8 @@ export async function assertResourceAccess(
      * `null` when the route is share-token-only (e.g. public transcript).
      */
     principal: AuthenticatedRequestContext | null;
-  }
+  },
+  ctx?: { waitUntil: (p: Promise<unknown>) => void }
 ): Promise<ShareAccessResult> {
   const required: SharePermission = args.required ?? "read";
   const db = getDb(env);
@@ -398,7 +399,7 @@ export async function assertResourceAccess(
       jti: tokenResult.jti,
       kind: args.kind,
       targetId: args.targetId
-    });
+    }, ctx);
     return {
       ok: true,
       ctx: {
@@ -460,7 +461,7 @@ export async function assertResourceAccess(
     via: "share",
     kind: args.kind,
     targetId: args.targetId
-  });
+  }, ctx);
   return {
     ok: true,
     ctx: args.principal,
@@ -486,23 +487,32 @@ export async function recordShareAccess(
     jti?: string;
     kind: ShareableKind;
     targetId: string;
-  }
+  },
+  ctx?: { waitUntil: (p: Promise<unknown>) => void }
 ): Promise<void> {
-  try {
-    await getDb(env).insert(auditLog).values({
-      id: crypto.randomUUID(),
-      userId: args.userId,
-      action: "share.access",
-      targetKind: args.kind,
-      targetId: args.targetId,
-      details: {
-        shareId: args.shareId,
-        via: args.via,
-        ...(args.jti ? { jti: args.jti } : {})
-      }
-    });
-  } catch {
-    // Audit failures must not break the access path.
+  const promise = (async () => {
+    try {
+      await getDb(env).insert(auditLog).values({
+        id: crypto.randomUUID(),
+        userId: args.userId,
+        action: "share.access",
+        targetKind: args.kind,
+        targetId: args.targetId,
+        details: {
+          shareId: args.shareId,
+          via: args.via,
+          ...(args.jti ? { jti: args.jti } : {})
+        }
+      });
+    } catch {
+      // Audit failures must not break the access path.
+    }
+  })();
+
+  if (ctx) {
+    ctx.waitUntil(promise);
+  } else {
+    await promise;
   }
 }
 
@@ -516,7 +526,8 @@ export async function recordShareGrant(
     targetId: string;
     permission: SharePermission;
     sharedWith: string | "public";
-  }
+  },
+  ctx?: { waitUntil: (p: Promise<unknown>) => void }
 ): Promise<void> {
   await recordAuthEvent(env, {
     userId: args.userId,
@@ -529,7 +540,7 @@ export async function recordShareGrant(
       permission: args.permission,
       sharedWith: args.sharedWith
     }
-  });
+  }, ctx);
 }
 
 /** Helper used by the revoke route. Logs `action = "share.revoked"`. */
@@ -540,7 +551,8 @@ export async function recordShareRevoke(
     shareId: string;
     kind: ShareableKind;
     targetId: string;
-  }
+  },
+  ctx?: { waitUntil: (p: Promise<unknown>) => void }
 ): Promise<void> {
   await recordAuthEvent(env, {
     userId: args.userId,
@@ -551,5 +563,5 @@ export async function recordShareRevoke(
       kind: args.kind,
       targetId: args.targetId
     }
-  });
+  }, ctx);
 }
